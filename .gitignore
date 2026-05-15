@@ -1,0 +1,85 @@
+# ── projectmem runtime + private files ─────────────────────────
+# This is the projectmem source repo itself — we keep our own
+# .projectmem/ folder fully private (internal scratch notes).
+# Consumers of projectmem get a different default (team memory
+# via git), see storage.py ensure_gitignore_entry().
+.projectmem/
+
+# ── Python ─────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+wheels/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# ── Landing site (not part of the Python package release) ──────
+# The landing site lives separately and is deployed independently.
+# Exclude the entire folder from the public source repo.
+landing/
+scripts/
+docs/
+
+# ── Editor / IDE / OS junk ─────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+Thumbs.db
+
+# ── Claude Code / AI tool worktrees ────────────────────────────
+.claude/
+.cursor-tutor/
+
+# ── Local secrets (never commit) ───────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ── Internal planning / roadmap docs (kept private) ────────────
+FUTURE_PLAN.md
+PROJECT_PLAN.md
+NOTES.md
+TODO.md
+
+# ── Sensitive / private (do not push) ──────────────────────────
+report/
+docs/
+PROJECTMEM_PLAN.md
+*PLAN*.md
+*plan*.md
+
+# Brand SVG sources only (PNGs and demo SVG stay public)
+brand/logo-mark.svg
+brand/logo-mark-mono-navy.svg
+brand/logo-mark-mono-ink.svg
+brand/logo-wordmark.svg
+brand/CHANGELOG.md

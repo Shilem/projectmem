@@ -1,0 +1,13 @@
+# projectmem funding configuration.
+#
+# Stars and shares mean more to us than money — but if you'd like to
+# support the project financially, GitHub Sponsors is the canonical path.
+# Enroll your GitHub account in Sponsors (https://github.com/sponsors) to
+# enable the "Sponsor" button on this repo.
+
+github: [riponcm]
+
+# Optional fallbacks — uncomment if you set them up later:
+# custom:
+#   - 'https://www.buymeacoffee.com/riponcm'
+#   - 'https://ko-fi.com/riponcm'

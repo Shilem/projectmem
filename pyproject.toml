@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling>=1.18,<1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "projectmem"
+version = "0.1.1"
+description = "AI-guided project memory: capture issues, attempts, fixes, decisions, and context in readable Markdown and JSONL."
+authors = [{ name = "Ripon Chandra Malo" }]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+  "typer>=0.12",
+  "mcp>=0.1.0",
+  "watchdog>=4.0",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Documentation",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "ruff>=0.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/riponcm/projectmem"
+Repository = "https://github.com/riponcm/projectmem"
+Issues = "https://github.com/riponcm/projectmem/issues"
+
+[project.scripts]
+projectmem = "projectmem.cli:main"
+pjm = "projectmem.cli:main"
+pjm-mcp = "projectmem.mcp_server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/projectmem"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"

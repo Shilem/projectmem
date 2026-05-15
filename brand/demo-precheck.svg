@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 340" font-family="JetBrains Mono, Menlo, monospace" font-size="13">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f1422"/>
+      <stop offset="100%" stop-color="#0b0f19"/>
+    </linearGradient>
+  </defs>
+  <rect width="720" height="340" rx="10" fill="url(#bg)"/>
+  <!-- terminal bar -->
+  <rect x="0" y="0" width="720" height="28" rx="10" fill="#131b2c"/>
+  <rect x="0" y="14" width="720" height="14" fill="#131b2c"/>
+  <circle cx="16" cy="14" r="5" fill="#ff5f57"/>
+  <circle cx="34" cy="14" r="5" fill="#febc2e"/>
+  <circle cx="52" cy="14" r="5" fill="#28c840"/>
+  <text x="360" y="18" text-anchor="middle" fill="#64748b" font-size="11">$ git commit -m "switch auth to JWT"</text>
+
+  <!-- prompt line -->
+  <text x="22" y="60" fill="#94a3b8" opacity="0">
+    projectmem: Pre-Commit Check
+    <animate attributeName="opacity" values="0;0;1;1;1;1;1;1" dur="6s" repeatCount="indefinite"/>
+  </text>
+  <text x="22" y="60" fill="#f1f5f9" font-weight="700" opacity="0">
+    projectmem: Pre-Commit Check
+    <animate attributeName="opacity" values="0;0;1;1;1;1;1;1" dur="6s" repeatCount="indefinite"/>
+  </text>
+
+  <!-- divider 1 -->
+  <text x="22" y="82" fill="#475569" opacity="0">────────────────────────────────────────────────
+    <animate attributeName="opacity" values="0;0;0;1;1;1;1;1" dur="6s" repeatCount="indefinite"/>
+  </text>
+
+  <!-- file name -->
+  <text x="22" y="110" fill="#f1f5f9" font-weight="600" opacity="0">
+    src/auth/middleware.py
+    <animate attributeName="opacity" values="0;0;0;1;1;1;1;1" dur="6s" repeatCount="indefinite"/>
+  </text>
+
+  <!-- WARN line 1 -->
+  <text x="40" y="136" opacity="0">
+    <tspan fill="#f59e0b" font-weight="700">WARN</tspan>
+    <tspan fill="#f1f5f9" dx="6">3 failed attempts on this file</tspan>
+    <animate attributeName="opacity" values="0;0;0;0;1;1;1;1" dur="6s" repeatCount="indefinite"/>
+  </text>
+  <text x="80" y="156" fill="#64748b" opacity="0">
+    Last: "JWT middleware broke session handling"
+    <animate attributeName="opacity" values="0;0;0;0;1;1;1;1" dur="6s" repeatCount="indefinite"/>
+  </text>
+  <text x="80" y="174" fill="#64748b" opacity="0">
+    (2 days ago)
+    <animate attributeName="opacity" values="0;0;0;0;1;1;1;1" dur="6s" repeatCount="indefinite"/>
+  </text>
+
+  <!-- WARN line 2 -->
+  <text x="40" y="200" opacity="0">
+    <tspan fill="#f59e0b" font-weight="700">WARN</tspan>
+    <tspan fill="#f1f5f9" dx="6">HIGH CHURN: 5 changes in 7 commits</tspan>
+    <animate attributeName="opacity" values="0;0;0;0;0;1;1;1" dur="6s" repeatCount="indefinite"/>
+  </text>
+
+  <!-- divider 2 -->
+  <text x="22" y="232" fill="#475569" opacity="0">────────────────────────────────────────────────
+    <animate attributeName="opacity" values="0;0;0;0;0;1;1;1" dur="6s" repeatCount="indefinite"/>
+  </text>
+
+  <!-- summary -->
+  <text x="22" y="258" fill="#94a3b8" opacity="0">
+    2 warning(s). Review before committing.
+    <animate attributeName="opacity" values="0;0;0;0;0;0;1;1" dur="6s" repeatCount="indefinite"/>
+  </text>
+
+  <!-- savings -->
+  <text x="22" y="296" opacity="0">
+    <tspan fill="#10b981" font-weight="700">~30 min</tspan>
+    <tspan fill="#94a3b8" dx="6">re-debugging just saved.</tspan>
+    <animate attributeName="opacity" values="0;0;0;0;0;0;0;1" dur="6s" repeatCount="indefinite"/>
+  </text>
+
+  <!-- blinking cursor -->
+  <rect x="22" y="313" width="9" height="14" fill="#10b981">
+    <animate attributeName="opacity" values="1;0;1" dur="1s" repeatCount="indefinite"/>
+  </rect>
+</svg>
