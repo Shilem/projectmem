@@ -34,9 +34,10 @@ import io
 import os
 import sys
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Annotated, Callable, Optional
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from projectmem.commands import attempt, decision, fix, log, note
 from projectmem.storage import (
@@ -182,7 +183,9 @@ def get_instructions() -> str:
 
     MANDATORY: call this at session start. The instructions describe the
     workflow rules you MUST follow while working in this project — they
-    are not advisory."""
+    are not advisory.
+
+    Read-only; does not modify memory."""
     path = ai_instructions_path()
     if path.exists():
         return path.read_text(encoding="utf-8")
@@ -203,7 +206,9 @@ def get_summary() -> str:
 
     Your prior assumptions about this project may be stale. Call this
     cheaply at session start (and again before ending) to verify your
-    work is recorded."""
+    work is recorded.
+
+    Read-only; does not modify memory or trigger event logging."""
     path = summary_path()
     if path.exists():
         return path.read_text(encoding="utf-8")
@@ -216,7 +221,10 @@ def get_project_map() -> str:
     """Read PROJECT_MAP.md to understand the repo structure.
 
     Call this at session start when structure matters (file layout,
-    entry points, ownership). Cheaper than scanning the filesystem."""
+    entry points, ownership). Cheaper than scanning the filesystem.
+
+    Read-only. Returns 'No project map found.' if PROJECT_MAP.md hasn't
+    been initialized — run `pjm init` first if so."""
     path = project_map_path()
     if path.exists():
         return path.read_text(encoding="utf-8")
@@ -225,13 +233,23 @@ def get_project_map() -> str:
 
 @mcp.tool()
 @safe_tool
-def precheck_file(file_path: str) -> str:
+def precheck_file(
+    file_path: Annotated[str, Field(
+        description="Project-relative or absolute file path to check "
+                    "(e.g., 'src/auth.py'). Matched against the `location` "
+                    "field of logged events — no file content is read from "
+                    "disk. Returns 'no warnings' if the file has no "
+                    "failure history."
+    )],
+) -> str:
     """Check a file's failure history BEFORE modifying it.
 
     MANDATORY: call this BEFORE proposing any change to a file.
     Surfaces failed past approaches, unresolved issues, and high churn
     so you don't repeat known dead-ends. Cheap (~100 tokens) and prevents
-    expensive re-debugging cycles."""
+    expensive re-debugging cycles.
+
+    Read-only; does not modify memory."""
     from projectmem.commands.precheck import _analyze_files
     events = read_events()
     warnings = _analyze_files([file_path], events)
@@ -247,11 +265,19 @@ def precheck_file(file_path: str) -> str:
 
 @mcp.tool()
 @safe_tool
-def get_issue(issue_id: str) -> str:
+def get_issue(
+    issue_id: Annotated[str, Field(
+        description="Zero-padded 4-digit issue ID returned by log_issue "
+                    "(e.g., '0042'). Numeric strings without padding "
+                    "(e.g., '42') are also accepted."
+    )],
+) -> str:
     """Read one specific issue's full history by ID (token-efficient).
 
     Use this when you only need one issue's context instead of the whole
-    summary. Example: get_issue('0042')."""
+    summary. Example: get_issue('0042').
+
+    Read-only."""
     from projectmem.storage import issues_dir
     idir = issues_dir()
     matches = list(idir.glob(f"{issue_id}-*.md"))
@@ -262,12 +288,28 @@ def get_issue(issue_id: str) -> str:
 
 @mcp.tool()
 @safe_tool
-def search_events(query: str, limit: int = 10) -> str:
+def search_events(
+    query: Annotated[str, Field(
+        description="Case-insensitive substring matched against each "
+                    "event's summary and notes. Plain text only — no "
+                    "regex or boolean operators."
+    )],
+    limit: Annotated[int, Field(
+        description="Maximum number of matching events to return "
+                    "(most recent first). Defaults to 10. Recommended "
+                    "range: 1-100.",
+        ge=1, le=100,
+    )] = 10,
+) -> str:
     """Plain-text search across all logged events.
 
     Token-efficient alternative to get_summary when you only need events
     matching a keyword. Returns matching event summaries with type and
-    timestamp."""
+    timestamp.
+
+    Read-only. Case-insensitive substring matching against each event's
+    summary and notes. Empty result returns a friendly message, not an
+    error."""
     events = read_events()
     q = query.lower()
     matches = []
@@ -292,7 +334,9 @@ def get_score() -> str:
 
     Returns an A+→F grade with concrete ROI numbers: debugging hours
     saved, tokens prevented, dollars protected. Use when the user asks
-    about progress or value."""
+    about progress or value.
+
+    Read-only; computes the score from events.jsonl on each call."""
     import json
     from projectmem.commands.score import calculate_score
     from projectmem.storage import events_path
@@ -317,11 +361,27 @@ def get_score() -> str:
 
 @mcp.tool()
 @safe_tool
-def get_context(tokens: int = 2000, focus: Optional[str] = None) -> str:
+def get_context(
+    tokens: Annotated[int, Field(
+        description="Approximate target token budget for the returned "
+                    "markdown (default 2000). Output may be slightly over "
+                    "or under as events are included as whole units. "
+                    "Recommended range: 500-8000.",
+        ge=100, le=20000,
+    )] = 2000,
+    focus: Annotated[Optional[str], Field(
+        description="Optional path prefix or keyword to bias selection "
+                    "toward (e.g., 'src/auth/'). When omitted, the "
+                    "context is project-wide."
+    )] = None,
+) -> str:
     """Generate a token-budgeted memory context block.
 
     Use when you don't want to read the full summary. ``focus`` (e.g.
-    'src/auth/') biases the context toward a specific area."""
+    'src/auth/') biases the context toward a specific area.
+
+    Read-only; assembles a freshly-budgeted context block from
+    events.jsonl."""
     from projectmem.commands.context import generate_context
     events = read_events()
     result = generate_context(events, token_budget=tokens, focus=focus, recent_days=30)
@@ -330,12 +390,23 @@ def get_context(tokens: int = 2000, focus: Optional[str] = None) -> str:
 
 @mcp.tool()
 @safe_tool
-def get_global_gotchas(library: Optional[str] = None) -> str:
+def get_global_gotchas(
+    library: Annotated[Optional[str], Field(
+        description="Optional library name to filter by (case-insensitive "
+                    "substring match — 'react' also matches "
+                    "'react-router'). When omitted, returns all gotchas "
+                    "across every library — useful when starting a new "
+                    "feature to scan for any relevant past lessons."
+    )] = None,
+) -> str:
     """Query cross-project library gotchas from ~/.projectmem/global/.
 
     Returns lessons learned in past projects that apply to the libraries
     you're about to use. Call whenever working with an unfamiliar library
-    or starting a new feature."""
+    or starting a new feature.
+
+    Read-only. Reads from ~/.projectmem/global/ (cross-project memory,
+    not this repo's .projectmem/)."""
     from projectmem.global_memory import read_gotchas
     gotchas = read_gotchas()
     if library:
@@ -360,12 +431,29 @@ def get_global_gotchas(library: Optional[str] = None) -> str:
 
 @mcp.tool()
 @safe_tool
-def log_issue(summary: str, location: Optional[str] = None) -> str:
+def log_issue(
+    summary: Annotated[str, Field(
+        description="One-line description of the bug or unexpected "
+                    "behavior (~140 chars recommended). Becomes the "
+                    "issue title and is matched by search_events."
+    )],
+    location: Annotated[Optional[str], Field(
+        description="Optional file path or component where the issue "
+                    "manifests (e.g., 'src/auth.py' or "
+                    "'login/double-submit'). Used by precheck_file to "
+                    "surface this history later."
+    )] = None,
+) -> str:
     """Open a new issue. Returns the issue ID.
 
     MANDATORY: call this IMMEDIATELY when you encounter a bug, regression,
     or unexpected behavior — BEFORE writing fix code. Logging up-front
-    means the issue survives interruptions and session boundaries."""
+    means the issue survives interruptions and session boundaries.
+
+    Side effects: appends an `issue` event to .projectmem/events.jsonl,
+    creates an issue file in .projectmem/issues/, updates summary.md,
+    and marks this issue as the active one for subsequent
+    record_attempt calls."""
     event = log.run(summary, location=location)
     return f"Logged issue #{event.issue_id}: {summary}"
 
@@ -373,10 +461,28 @@ def log_issue(summary: str, location: Optional[str] = None) -> str:
 @mcp.tool()
 @safe_tool
 def record_attempt(
-    summary: str,
-    outcome: str = "failed",
-    location: Optional[str] = None,
-    issue_id: Optional[str] = None,
+    summary: Annotated[str, Field(
+        description="One-line description of what you tried (e.g., "
+                    "'tried contain: layout — preview still jumps')."
+    )],
+    outcome: Annotated[str, Field(
+        description="Result of the attempt. Must be exactly one of "
+                    "'worked', 'failed', or 'partial'. Defaults to "
+                    "'failed' — the safer default when an outcome is "
+                    "uncertain.",
+        pattern="^(worked|failed|partial)$",
+    )] = "failed",
+    location: Annotated[Optional[str], Field(
+        description="Optional file path or component touched by this "
+                    "attempt."
+    )] = None,
+    issue_id: Annotated[Optional[str], Field(
+        description="Optional zero-padded issue ID (e.g., '0042') to "
+                    "attach this attempt to. When omitted, attaches to "
+                    "the active issue; if no active issue exists, an "
+                    "implicit parent issue is auto-created from this "
+                    "attempt's text."
+    )] = None,
 ) -> str:
     """Record a fix attempt on the current issue.
 
@@ -386,7 +492,10 @@ def record_attempt(
     `outcome` must be 'worked', 'failed', or 'partial'. Pass `issue_id`
     explicitly to attach to a specific issue; otherwise the attempt
     attaches to the active issue. If no active issue exists, an implicit
-    parent issue is auto-created from this attempt's text (L-008)."""
+    parent issue is auto-created from this attempt's text (L-008).
+
+    Side effects: appends an `attempt` event and updates the issue file.
+    Does NOT close the issue — call record_fix for that."""
     worked = outcome == "worked"
     failed = outcome == "failed"
     partial = outcome == "partial"
@@ -399,37 +508,83 @@ def record_attempt(
 
 @mcp.tool()
 @safe_tool
-def record_fix(summary: str, location: Optional[str] = None) -> str:
+def record_fix(
+    summary: Annotated[str, Field(
+        description="One-line description of the confirmed fix (e.g., "
+                    "'guarded submit handler with isSubmitting ref')."
+    )],
+    location: Annotated[Optional[str], Field(
+        description="Optional file path or component where the fix was "
+                    "applied."
+    )] = None,
+) -> str:
     """Record a confirmed fix and close the current issue.
 
     Only call AFTER you have evidence the fix works (test passes, error
     gone, user confirmed). Closing the issue clears the active-issue
     marker so the next record_attempt won't silently latch onto this
-    closed issue (L-027a)."""
+    closed issue (L-027a).
+
+    Side effects: appends a `fix` event, closes the active issue, and
+    clears the active-issue marker so the next record_attempt won't
+    silently latch onto a closed issue."""
     event = fix.run(summary, location=location)
     return f"Fixed issue #{event.issue_id}: {summary}"
 
 
 @mcp.tool()
 @safe_tool
-def add_decision(summary: str, location: Optional[str] = None) -> str:
+def add_decision(
+    summary: Annotated[str, Field(
+        description="One-line description of the architectural or "
+                    "product decision (e.g., 'use bcrypt rounds=12 for "
+                    "password hashing'). Becomes part of the project's "
+                    "permanent record — write it for a future contributor."
+    )],
+    location: Annotated[Optional[str], Field(
+        description="Optional file path or scope where the decision "
+                    "applies (e.g., 'src/auth/' for a module-level "
+                    "choice). Helps precheck_file cite the decision "
+                    "when the file is later touched."
+    )] = None,
+) -> str:
     """Record an architectural or product decision permanently.
 
     Call when you make a choice that future sessions or contributors
     should know about. Decisions show up in `summary.md` and in
-    `pjm wrap` context blocks."""
+    `pjm wrap` context blocks.
+
+    Side effects: appends a `decision` event and updates summary.md.
+    Decisions are append-only — to revise, log a new decision that
+    supersedes the prior one (rather than editing)."""
     decision.run(summary, location=location)
     return f"Recorded decision: {summary}"
 
 
 @mcp.tool()
 @safe_tool
-def add_note(summary: str, location: Optional[str] = None) -> str:
+def add_note(
+    summary: Annotated[str, Field(
+        description="One-line description of the gotcha, setup detail, "
+                    "or context worth preserving. Prefix with 'gotcha:' "
+                    "or 'lesson:' to enable cross-project promotion — "
+                    "e.g., 'gotcha: bcrypt v4 silently truncates "
+                    "passwords longer than 72 bytes'."
+    )],
+    location: Annotated[Optional[str], Field(
+        description="Optional file path or library this note applies to "
+                    "(e.g., 'bcrypt' for a library-specific gotcha)."
+    )] = None,
+) -> str:
     """Record a gotcha, setup detail, or other durable context.
 
     Use when you discover something important that doesn't fit as an
     issue or decision. Notes survive across sessions and appear in
-    wrap context blocks."""
+    wrap context blocks.
+
+    Side effects: appends a `note` event. Notes prefixed `gotcha:`,
+    `lesson:`, or `warning:` are eligible for auto-promotion to
+    ~/.projectmem/global/ for cross-project recall (L-046)."""
     note.run(summary, location=location)
     return f"Recorded note: {summary}"
 

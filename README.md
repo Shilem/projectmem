@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.riponcm/projectmem -->
+
 <div align="center">
   <img src="https://raw.githubusercontent.com/projectmem/projectmemdoc/main/logo/projectmem-wordmark-800.png" alt="projectmem" width="420" />
 
@@ -24,6 +26,26 @@
 
   <img src="https://raw.githubusercontent.com/projectmem/projectmemdoc/main/demo/precheck-warning.gif" alt="projectmem pre-commit warning demo" width="720" />
 </div>
+
+---
+
+## 🎬 Watch the demo
+
+<p align="center">
+  <a href="https://youtu.be/YCqfJ8-XVqY">
+    <img src="https://img.youtube.com/vi/YCqfJ8-XVqY/maxresdefault.jpg" alt="projectmem — 60-second demo" width="720" />
+  </a>
+  <br />
+  <em>60-second promo · click to watch on YouTube · full screen-recorded tutorial coming soon</em>
+</p>
+
+## 📚 Docs
+
+| Doc | What's in it |
+|---|---|
+| **[TUTORIAL.md](TUTORIAL.md)** | 15-minute step-by-step walkthrough — set up projectmem on your own project, watch the lifecycle, see the pre-commit warning fire. |
+| **[CHANGELOG.md](CHANGELOG.md)** | Release history. Latest: v0.1.3 — schema enrichment, secret redaction, conda/venv hook fix, stack auto-detect, MCP config printed at init. |
+| **[LICENSE](LICENSE)** | MIT |
 
 ---
 

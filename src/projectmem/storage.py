@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from projectmem.models import Event
@@ -390,6 +391,26 @@ def read_events(root: Path | None = None) -> list[Event]:
 
 
 def append_event(event: Event, root: Path | None = None) -> Event:
+    # Scrub known secret patterns out of user-supplied text fields BEFORE
+    # they touch disk. "100% local" implies "100% your responsibility" only
+    # if we let secrets leak through; default-on redaction is the trust
+    # contract. Opt out via ``PROJECTMEM_NO_REDACT=1``.
+    try:
+        from projectmem.redaction import redact_event_fields
+
+        fired = redact_event_fields(event)
+        if fired:
+            kinds = ", ".join(sorted(set(fired)))
+            print(
+                f"projectmem: redacted {len(fired)} secret(s) before write ({kinds})",
+                file=sys.stderr,
+            )
+    except Exception:
+        # Redaction is a guardrail, not a gatekeeper — if anything goes
+        # wrong inside the scrubber we still write the event. Better a
+        # logged secret than a lost event in a tool whose job is logging.
+        pass
+
     path = events_path(root)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event.to_dict(), sort_keys=True) + "\n")

@@ -5,6 +5,14 @@
 # via git), see storage.py ensure_gitignore_entry().
 .projectmem/
 
+# Local mcp-publisher CLI binary downloaded for releasing to the
+# official MCP Registry. ~20MB Go binary — must NOT ship in sdist.
+mcp-publisher
+
+# Local server.json manifest used by mcp-publisher (separate from
+# pyproject metadata; not part of the Python package).
+server.json
+
 # ── Python ─────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]

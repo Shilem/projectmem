@@ -47,12 +47,15 @@ def init(
     no_watch: bool = typer.Option(False, "--no-watch", help="Skip auto-starting the file watcher."),
     no_backfill: bool = typer.Option(False, "--no-backfill", help="Skip ingesting recent git history."),
     no_claude_md: bool = typer.Option(False, "--no-claude-md", help="Skip writing/updating the CLAUDE.md bridge block."),
+    no_stack_detect: bool = typer.Option(False, "--no-stack-detect", help="Skip auto-populating PROJECT_MAP.md from detected stack."),
+    no_mcp_config: bool = typer.Option(False, "--no-mcp-config", help="Skip printing the MCP client config block at the end."),
     global_tags: str | None = typer.Option(None, "--global-tags", help="Only inherit matching tags (comma-separated)."),
 ) -> None:
     """Create .projectmem/ in the current repo."""
     init_command.run(
         no_hooks=no_hooks, no_global=no_global, no_watch=no_watch,
         no_backfill=no_backfill, no_claude_md=no_claude_md,
+        no_stack_detect=no_stack_detect, no_mcp_config=no_mcp_config,
         global_tags=global_tags,
     )
 

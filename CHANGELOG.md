@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.1.3
+
+**Six focused improvements: schema enrichment, secret redaction, the conda/venv hook fix (L-047), stack-aware PROJECT_MAP (L-048), MCP config printed at end of init (L-049), and a silent post-commit auto-capture (L-050).** A metadata pass that lifts Glama tool-quality scores from 75% with one B-tool to a projected ~90% all-A; a privacy guardrail that scrubs accidentally-pasted credentials before they hit disk; a regression fix that restores the pre-commit warning for every conda / pyenv / venv user; and two `pjm init` UX additions that remove the two biggest first-run friction points — *"what is this project?"* and *"how do I wire this up?"*.
+
+### `pjm init` now pre-populates PROJECT_MAP.md from your stack (L-048)
+
+Before 0.1.3, `PROJECT_MAP.md` was a `Status: not created yet` placeholder that an AI session had to fill in by re-reading every manifest and folder — exactly the kind of token-burn projectmem is supposed to prevent. `pjm init` now reads `pyproject.toml` / `package.json` / `Cargo.toml` / `go.mod` directly and writes an actual map: project description, stack tags + frameworks + key libraries, main folders, and entry points. The Setup-Mode prompt becomes *refining* the map, not building it from zero. Skip with `--no-stack-detect`. **Safety:** only overwrites when the current map still contains the placeholder marker — a human- or AI-edited map is never clobbered.
+
+### `pjm init` now prints the MCP client config block at the end (L-049)
+
+Every new user used to ask the same question right after `pjm init`: *"OK, what JSON do I paste, and where?"* The README had it, but six clicks deep. Now init ends with a copy-pasteable config block (absolute `sys.executable` baked in to dodge the Claude-Desktop / Cursor PATH-inheritance gotcha) plus the on-disk config-file paths for Claude Desktop, Cursor, Antigravity (legacy IDE), and Codex (TOML reminder included). Skip with `--no-mcp-config`. Notes the Antigravity v2 path may differ — the v1 path is the verified one.
+
+### Post-commit auto-capture no longer prints over the shell prompt (L-050)
+
+The post-commit / post-merge hooks run `pjm _auto-capture` in the background (with `&`). Before 0.1.3 the snippet redirected only stderr (`2>/dev/null`), so the success line — *"[projectmem] Auto-captured: …"* — printed to stdout *after* `git commit` had already returned the prompt to the user. Visually it looked like the terminal was stuck waiting for input; users would press Ctrl-C to "recover" when in fact their keystrokes were already being captured by the shell. Now both streams are redirected (`>/dev/null 2>&1 &`), so the capture stays silent. Verify it ran via `pjm show` if you want to see the event.
+
+### Pre-commit warning silently no-op under conda / venv (L-047, fixed)
+
+### Pre-commit warning silently no-op under conda / venv (L-047, fixed)
+
+The killer feature — `git commit` warning you about repeating a failed approach — was silently broken for the majority of Python users since 0.1.1. The installed hook relied on `command -v pjm` to find the binary at commit time. Git invokes hooks via a non-interactive bash, which does not run `.zshrc` / `.bashrc`, so conda / pyenv / venv PATH modifications were absent and the lookup quietly returned nothing. The hook ran, found no `pjm`, exited 0, and produced no output. Users saw a normal commit and assumed projectmem had no warning to give. In fact it had the warning, ready, in memory — and no way to deliver it.
+
+The fix: `install_hooks` now resolves the absolute path to `pjm` (via `shutil.which`, falling back to `sys.prefix/bin/pjm`) at install time and bakes it into the hook as `PJM_BIN="/abs/path/to/pjm"`. A runtime `command -v` fallback remains for the rare case where the install-time binary was later moved. The hook script's `if [ -d ".projectmem" ] && [ -n "$PJM_BIN" ]` guard means a stale path still degrades gracefully instead of erroring at commit time.
+
+Verified end-to-end with a regression test that simulates git's non-interactive hook environment (stripped PATH, no shell init), and with a real `git commit` in a conda-installed setup — the warning now appears reliably. Users who installed projectmem before 0.1.3 need to run `pjm hooks install` once after upgrading to refresh the baked path.
+
+### Secret redaction on write (new)
+
+projectmem stores event text verbatim in `.projectmem/events.jsonl` — that's the local-first promise. The flip side is that a careless paste ("the bug repros when I set `OPENAI_API_KEY=sk-...`") used to land that key on disk in plain text, often in a file that's then committed to git. Starting in 0.1.3, `storage.append_event` runs a conservative pattern scrubber across the event's user-supplied text fields (`summary`, `notes`, `command`, `git_message`, `location`) **before** anything touches disk. Matches are replaced with `[REDACTED:<kind>]` and a one-line stderr notice fires so the user knows redaction happened.
+
+Patterns covered: OpenAI / Anthropic / OpenRouter `sk-…` keys, GitHub classic tokens (`ghp_…`, `gho_…`, `ghu_…`, `ghs_…`, `ghr_…`) and fine-grained PATs (`github_pat_…`), AWS access key IDs (`AKIA…`), Google API keys (`AIza…`), Slack tokens (`xox[abprs]-…`), Stripe live/test keys (`sk_live_…`, `pk_live_…`, etc.), JWTs (`eyJ…`), `Bearer` tokens, and PEM private-key block headers. Patterns are intentionally narrow — anchored to recognisable prefixes with minimum-length requirements — so ordinary debugging prose (`"tried contain: layout"`, `"forgot password reset flow"`) is never touched. 29 new tests pin both the true-positive and false-positive behavior.
+
+Default on. Escape hatch: `PROJECTMEM_NO_REDACT=1` skips scrubbing entirely (for debugging the redactor itself or for trusted offline contexts). Redaction is wrapped in a defensive try/except so a scrubber bug never blocks the primary write path — better a logged secret than a lost event in a tool whose job is logging.
+
+### MCP tool schema enrichment
+
+No behavior changes; this gives every tool's parameters real `description` fields in the JSON schema (via Pydantic `Field` annotations through FastMCP), plus a one-line side-effect / read-only callout in each tool's docstring.
+
+The Glama tool-quality evaluator was flagging Parameters at 1-2/5 across the entire surface because parameters had only names and types — agents had to guess what `summary`, `location`, `outcome`, `library`, `tokens`, `focus`, `query`, `limit`, `issue_id`, and `file_path` actually meant. They now have explicit descriptions and, where useful, schema constraints:
+
+- `search_events.limit` now enforces `1 ≤ limit ≤ 100` in the schema.
+- `record_attempt.outcome` now enforces the pattern `^(worked|failed|partial)$` — invalid outcomes are rejected at the schema layer, not silently coerced.
+- `get_context.tokens` now enforces `100 ≤ tokens ≤ 20000`.
+
+Every tool also gained one short docstring line stating side effects (e.g., *"Appends an `issue` event to `.projectmem/events.jsonl`, creates an issue file in `.projectmem/issues/`, updates `summary.md`, and marks this issue as the active one"*) or its read-only nature. The MCP `instructions=` block was already strong and was left alone.
+
+**What didn't change:** function bodies, return values, defaults, parameter names, parameter order, the 14-tool surface, the CLI, storage layout, hooks, watcher, and the test suite (still 12/12 passing). All existing MCP client configurations continue to work without modification.
+
+Bumped to 0.1.3 to publish the richer schema to both PyPI and the official MCP Registry. Detailed per-tool analysis and rollback plan in [report/GLAMA_QUALITY_IMPROVEMENT_PLAN.md](report/GLAMA_QUALITY_IMPROVEMENT_PLAN.md).
+
+## 0.1.2
+
+**Metadata-only republish to satisfy the official MCP Registry's package-ownership check.** Added the line `mcp-name: io.github.riponcm/projectmem` to `README.md` so the registry can verify the GitHub namespace owner (`riponcm`) controls the published PyPI package. No code or behavior changes.
+
 ## 0.1.1
 
 **First stable public release.** v0.0.6 was the intelligence layer; v0.1.1 is the polish + cross-client verification + cross-project memory wiring that makes it ready for general use. 46 lessons logged from soft-launch dogfooding and live verification, a 22-item batch polish-pass + 6 follow-up fixes, plus **end-to-end verification across all 4 major MCP clients** (Antigravity, Claude Desktop, Cursor, Codex) **and across 3 language ecosystems** (JavaScript, Python, Go) for cross-project memory.
@@ -63,7 +117,7 @@ All four major 2026 MCP clients tested end-to-end against a real project:
 ### Carried over to v0.0.8 backlog
 
 - L-038 (`pjm watch` duplicate churn events for one incident) — known cosmetic noise; documented fix queued for v0.0.8 polish.
-- Universal AI Bridge (`pjm bridge install`, `pjm doctor`) — multi-bridge `pjm init` writing `.cursor/rules/`, `.github/copilot-instructions.md`, `AGENTS.md`, etc. — full design in FUTURE_PLAN.md.
+- Universal AI Bridge (`pjm bridge install`, `pjm doctor`) — multi-bridge `pjm init` writing `.cursor/rules/`, `.github/copilot-instructions.md`, `AGENTS.md`, etc.
 
 ---
 
