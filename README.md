@@ -32,11 +32,11 @@
 ## 🎬 Watch the demo
 
 <p align="center">
-  <a href="https://youtu.be/YCqfJ8-XVqY">
-    <img src="https://img.youtube.com/vi/YCqfJ8-XVqY/maxresdefault.jpg" alt="projectmem — 60-second demo" width="720" />
+  <a href="https://youtu.be/pELGdXHj_Ls">
+    <img src="https://img.youtube.com/vi/pELGdXHj_Ls/maxresdefault.jpg" alt="projectmem — 60-second demo" width="720" />
   </a>
   <br />
-  <em>60-second promo · click to watch on YouTube · full screen-recorded tutorial coming soon</em>
+  <em>Full screen-recorded tutorial- watch on YouTube</em>
 </p>
 
 ## 📚 Docs
