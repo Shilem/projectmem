@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.1.4
+
+**The accountable-judgment release: memory that flags its own staleness instead of silently trusting (or deleting) it — plus a dashboard that opens on an all-at-a-glance Overview.** Six small features (~150 lines, no new dependencies, no schema breaks) sharpen what makes projectmem different: it never deletes a memory, it tells you when one may have gone stale, it lets you retire decisions without losing history, it lists what already failed before you try it again, it briefs you at session start, it snoozes politely when it's wrong, and it exports its judgment to CLAUDE.md for agents that don't speak MCP. Also bumps the version (the `__init__.py` / `pyproject.toml` mismatch is corrected to a single `0.1.4`).
+
+### New: stale-memory detection — flag, never delete
+
+Other memory tools silently decay or delete old memories (and collect bug reports about wanted memories disappearing). projectmem now does the opposite: every decision/fix/note that cites a file is cross-referenced against that file's git history, and when the file has changed substantially since the memory was logged (3+ commits, or the file no longer exists), `pjm precheck` and the MCP `precheck_file` tool flag it — *"decision [evt_…] predates 4 commits to auth.py — confirm it still holds, or retire it"*. Nothing is hidden, nothing is removed; a human (or agent) decides. Deterministic `git log` counts; no embeddings, no daemon.
+
+### New: superseded-decision marking — retire without rewriting history
+
+`pjm decision "switch to argon2" --supersedes <event-id>` (also on the MCP `add_decision` tool) records a new decision that retires an old one. The old event stays physically in `events.jsonl` (append-only, always), drops out of `summary.md`, and shows up in `pjm search` tagged `(superseded)`. Search output now prints event ids so the reference is one copy-paste away. A bad reference fails *before* anything is written. Together with stale detection this completes the non-destructive answer to memory decay: **detect staleness → supersede explicitly → never lose history.**
+
+### New: `pjm brief` — the session-start briefing
+
+One screen that answers "where was I?": active failure warnings by file, possibly-stale memories, open issues, the latest live decisions, stack-relevant gotchas from global memory, and the prevention score with a week-over-week delta. Composes data the other commands already compute; runs in milliseconds; nothing leaves the machine.
+
+### New: precheck snooze — the polite off-switch
+
+`pjm precheck --snooze 2h` (forms: `30m`, `2h`, `1d`) silences pre-commit warnings for a bounded window instead of pushing annoyed users to `--no-verify` (which silences forever and leaves no trace). The snooze is itself logged to memory — even the silence is audited — and while active, every commit prints one dim line saying warnings are snoozed, so a silenced warning is never mistaken for a clean check. `--unsnooze` restores warnings early; expired markers clean themselves up.
+
+### New: failed approaches listed in precheck output
+
+The pre-commit warning (and MCP `precheck_file`) now lists the dead ends themselves — *"What already failed here: ✗ tried CSS contain:layout (2w ago) ✗ debounced the handler (2w ago)"* — instead of just a count. The data was always in the log; now it's at the decision point. `pjm search --failed-only` lists the project's full catalogue of dead ends.
+
+### New: `pjm export --claude-md` — judgment for agents without MCP
+
+Compiles live memory — current decisions (with stale flags), known gotchas, and a "Do NOT retry — these already failed" section — into a marked, auto-regenerated block inside `CLAUDE.md` (`--cursor` also writes `.cursorrules`; `--stdout` previews). Any agent that reads the file inherits the project's judgment with zero MCP setup. The block is replaced in place on re-run; the rest of the file — including the `pjm init` MCP bridge block — is never touched. Superseded decisions are excluded; possibly-stale ones are flagged, not hidden.
+
+### Fixed: walk-up discovery no longer mistakes the global store for a project
+
+Running any `pjm` write command from a directory under `$HOME` with no initialized project used to walk up, land on `~/.projectmem/` (the machine-wide **global store**), misread it as project memory, and silently accrete events into it — then crash on commands that expected an `issues/` directory. Discovery (both the CWD check and the walk-up) now only accepts an *initialized* project dir — one containing the `config.toml` that `pjm init` always writes and the global store never has. Found by dogfooding 0.1.4 on this very repo.
+
+### Also fixed (caught by the 0.1.4 testing playground)
+
+- `pjm precheck payment.py auth.py` — checking *named* files now works from the CLI. The module docstring had advertised a `--files` option that was never wired up; files are now a positional argument (staged files remain the default).
+- `pjm search payment.py` now matches the **`location`** field, so per-file lookups behave like precheck: attempts logged with `--at payment.py` are findable by filename (previously search only scanned summary/notes/files).
+
+### Event schema
+
+One new **optional** field: `supersedes` (event id) on decision events. Existing logs parse unchanged; older projectmem versions ignore the field. The 14-tool MCP surface is unchanged (`add_decision` gained an optional parameter; `search_events`/`precheck_file` outputs got richer). 23 new tests (81 total).
+
+**`pjm visualize` gets an Overview landing and a light "product" redesign — the whole dashboard now matches the projectmem brand, and the new first screen shows all four lenses at a glance.** Opening `pjm visualize` used to drop you straight into the Story Map force graph and make you tab around to assemble a mental picture. 0.1.4 adds an **Overview** tab (now the default) that puts the four lenses — failure heatmap, ROI, project structure, and timeline — in a single 2×2 glance, and re-themes the entire dashboard from the old dark palette to a clean light theme drawn from the poster/brand colors.
+
+### New: Overview tab (default landing)
+
+The first thing you see is now a calm, all-at-once summary instead of a graph you have to interpret:
+
+- **Story Map → failure heatmap.** The top files ranked by effort burned (failed attempts ×3 + mentions), bar colour deepening from blue to red with failure intensity. The one chart that answers "where is this project bleeding time?" without a single click.
+- **ROI Dashboard → headline cards + a prevention-grade gauge.** Tokens saved, debugging hours saved, USD saved, plus a real A+→F semicircle gauge bound to `pjm score` (same single ROI model — no second source of truth). The gauge colour tracks the grade band.
+- **Project Map → compact node graph.** A 10-node summary of `PROJECT_MAP.md` with folders larger, and a red dashed ring on any file that has recorded failures — so structure and pain show up together.
+- **Timeline → swimlanes.** issue / attempt / fix / decision as four horizontal lanes of dots across the project's real date range, with an auto-scaled month axis.
+
+Each panel has an `open ↗` link that jumps to the full interactive tab.
+
+### Light "product" re-theme across every tab
+
+The dashboard's CSS variables were re-grounded in the projectmem brand palette (navy header, blue/teal/coral accents on a light surface). Story Map, ROI, Project Map (tree + graph), and Timeline were all audited for dark-only colours — invisible-on-light graph labels and the dark legend/tooltip cards are fixed — so the four detail tabs and the new Overview now read as one coherent app. The grade/score for the gauge is injected via a new `{{SCORE_DATA}}` payload built from `calculate_score`. No data-model or CLI-surface changes; `pjm visualize` flags are unchanged.
+
 ## 0.1.3
 
 **Six focused improvements: schema enrichment, secret redaction, the conda/venv hook fix (L-047), stack-aware PROJECT_MAP (L-048), MCP config printed at end of init (L-049), and a silent post-commit auto-capture (L-050).** A metadata pass that lifts Glama tool-quality scores from 75% with one B-tool to a projected ~90% all-A; a privacy guardrail that scrubs accidentally-pasted credentials before they hit disk; a regression fix that restores the pre-commit warning for every conda / pyenv / venv user; and two `pjm init` UX additions that remove the two biggest first-run friction points — *"what is this project?"* and *"how do I wire this up?"*.

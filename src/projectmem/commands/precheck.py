@@ -11,9 +11,12 @@ Usage:
     pjm precheck --files X Y              # Check specific files
     pjm precheck --level info|warn|block  # Strictness
     pjm precheck --quiet                  # Only show warnings
+    pjm precheck --snooze 2h              # Silence warnings for a while
+    pjm precheck --unsnooze               # Re-enable warnings now
 """
 from __future__ import annotations
 
+import re
 import subprocess
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
@@ -23,7 +26,7 @@ from typing import Any
 import typer
 
 from projectmem.models import Event
-from projectmem.storage import MEM_DIR, read_events
+from projectmem.storage import MEM_DIR, read_events, require_mem_dir
 
 
 # ── Thresholds ──
@@ -39,6 +42,94 @@ SEVERITY_BLOCK = "block"
 
 SEVERITY_LEVELS = {SEVERITY_INFO: 0, SEVERITY_WARN: 1, SEVERITY_BLOCK: 2}
 
+# ── Snooze (0.1.4) ──
+# A TTL'd marker file silences precheck output without uninstalling the
+# hook. Unlike `git commit --no-verify`, a snooze is itself recorded in the
+# event log, so even the silence is auditable. Expired markers are removed
+# on the next run.
+SNOOZE_MARKER = "precheck.snooze"
+_DURATION_RE = re.compile(r"^(\d+)\s*([mhd])$", re.IGNORECASE)
+_DURATION_UNITS = {"m": "minutes", "h": "hours", "d": "days"}
+
+
+def parse_snooze_duration(text: str) -> timedelta:
+    """Parse '30m' / '2h' / '1d' into a timedelta. Raises ValueError."""
+    match = _DURATION_RE.match(text.strip())
+    if not match:
+        raise ValueError(
+            f"Invalid duration '{text}' — use forms like 30m, 2h, or 1d."
+        )
+    value, unit = int(match.group(1)), match.group(2).lower()
+    if value <= 0:
+        raise ValueError("Snooze duration must be positive.")
+    return timedelta(**{_DURATION_UNITS[unit]: value})
+
+
+def _snooze_path(root: Path | None = None) -> Path:
+    return require_mem_dir(root) / SNOOZE_MARKER
+
+
+def active_snooze(root: Path | None = None) -> datetime | None:
+    """Return the snooze expiry if one is active; clean up expired markers."""
+    try:
+        path = _snooze_path(root)
+    except Exception:
+        return None
+    if not path.exists():
+        return None
+    try:
+        expiry = datetime.fromisoformat(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        path.unlink(missing_ok=True)
+        return None
+    if expiry <= datetime.now(timezone.utc):
+        path.unlink(missing_ok=True)
+        return None
+    return expiry
+
+
+def set_snooze(duration_text: str, root: Path | None = None) -> datetime:
+    """Write the snooze marker and log an audit note. Returns the expiry."""
+    delta = parse_snooze_duration(duration_text)
+    expiry = datetime.now(timezone.utc).replace(microsecond=0) + delta
+    _snooze_path(root).write_text(expiry.isoformat(), encoding="utf-8")
+    # The audit note is best-effort: a snooze must work even if the event
+    # write fails, but when it succeeds the silence itself is on record.
+    try:
+        from projectmem.storage import append_event
+
+        append_event(
+            Event(
+                type="note",
+                summary=f"precheck warnings snoozed for {duration_text} "
+                        f"(until {expiry.isoformat()})",
+            ),
+            root,
+        )
+    except Exception:
+        pass
+    return expiry
+
+
+def clear_snooze(root: Path | None = None) -> bool:
+    """Remove the snooze marker. Returns True if one existed."""
+    try:
+        path = _snooze_path(root)
+    except Exception:
+        return False
+    existed = path.exists()
+    path.unlink(missing_ok=True)
+    return existed
+
+
+def _remaining(expiry: datetime) -> str:
+    delta = expiry - datetime.now(timezone.utc)
+    minutes = max(1, int(delta.total_seconds() // 60))
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, mins = divmod(minutes, 60)
+    return f"{hours}h{mins:02d}m" if mins else f"{hours}h"
+
 
 def run(
     level: str = SEVERITY_WARN,
@@ -46,12 +137,44 @@ def run(
     files: list[str] | None = None,
     quiet: bool = False,
     root: Path | None = None,
+    snooze: str | None = None,
+    unsnooze: bool = False,
 ) -> None:
     """Run the pre-commit check."""
     root_path = root or Path.cwd()
 
     # Guard: only run if .projectmem exists
     if not (root_path / MEM_DIR).exists():
+        return
+
+    # Snooze management actions short-circuit the check itself.
+    if unsnooze:
+        if clear_snooze(root):
+            typer.echo("projectmem: precheck warnings re-enabled.")
+        else:
+            typer.echo("projectmem: no active snooze.")
+        return
+    if snooze:
+        try:
+            expiry = set_snooze(snooze, root)
+        except ValueError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(1)
+        typer.echo(
+            f"projectmem: precheck warnings snoozed until "
+            f"{expiry.strftime('%H:%M UTC')} (logged to memory). "
+            f"Re-enable early with `pjm precheck --unsnooze`."
+        )
+        return
+
+    # Honor an active snooze: stay quiet, but say so in one dim line so a
+    # silenced warning is never mistaken for a clean check.
+    expiry = active_snooze(root)
+    if expiry is not None:
+        typer.echo(
+            f"\033[2mprojectmem: warnings snoozed ({_remaining(expiry)} left) — "
+            f"`pjm precheck --unsnooze` to re-enable.\033[0m"
+        )
         return
 
     # Determine which files to check
@@ -73,7 +196,7 @@ def run(
     except Exception:
         return  # Silent if memory can't be read
 
-    warnings = _analyze_files(target_files, events)
+    warnings = _analyze_files(target_files, events, root=root_path)
 
     if not warnings:
         if not quiet:
@@ -90,13 +213,26 @@ def run(
 
 
 def _analyze_files(
-    files: list[str], events: list[Event]
+    files: list[str], events: list[Event], root: Path | None = None
 ) -> list[dict[str, Any]]:
     """Analyze each file against project memory, return warnings."""
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=RECENT_DAYS)
 
     warnings: list[dict[str, Any]] = []
+
+    # ── Check 6 input: stale memories (computed once for all files) ──
+    # Decisions/fixes/notes whose cited file changed substantially after
+    # they were logged. Never deleted, never down-ranked — flagged for a
+    # human (or agent) to confirm or supersede.
+    try:
+        from projectmem.staleness import find_stale_events
+
+        stale_by_file: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for item in find_stale_events(events, root):
+            stale_by_file[item["file"]].append(item)
+    except Exception:
+        stale_by_file = defaultdict(list)
 
     for file_path in files:
         # Find all events referencing this file
@@ -122,16 +258,22 @@ def _analyze_files(
         if failed_attempts:
             count = len(failed_attempts)
             severity = SEVERITY_BLOCK if count >= FAILED_ATTEMPT_BLOCK_COUNT else SEVERITY_WARN
-            last = failed_attempts[-1]
+            # List the dead ends themselves (0.1.4), not just a count — the
+            # whole point of memory-of-failure is telling the next session
+            # WHAT not to retry. Up to 3 most recent, newest first.
+            details = []
+            for attempt in reversed(failed_attempts[-3:]):
+                details.append(
+                    f"✗ {attempt.summary[:90]} ({_age(attempt.timestamp)})"
+                )
+            if count > 3:
+                details.append(f"  ... and {count - 3} more (pjm search --failed-only)")
             warnings.append({
                 "file": file_path,
                 "severity": severity,
                 "type": "failed_attempts",
-                "title": f"{count} failed attempt{'s' if count != 1 else ''} on this file",
-                "details": [
-                    f"Last failure: {last.summary[:100]}",
-                    f"  ({_age(last.timestamp)})",
-                ],
+                "title": f"What already failed here ({count} attempt{'s' if count != 1 else ''}):",
+                "details": details,
             })
 
         # ── Check 2: Open issues ──
@@ -199,6 +341,35 @@ def _analyze_files(
                     f"{last.summary[:100]}",
                     f"  ({_age(last.timestamp)})",
                 ],
+            })
+
+        # ── Check 6: Possibly-stale memories (0.1.4) ──
+        stale_items = stale_by_file.get(file_path, [])
+        if stale_items:
+            details = []
+            for item in stale_items[:3]:
+                event = item["event"]
+                if item["commits_since"] == -1:
+                    reason = "cited file no longer exists"
+                else:
+                    reason = f"predates {item['commits_since']} commits to this file"
+                details.append(
+                    f"{event.type} [{event.id}] \"{event.summary[:70]}\" — {reason}"
+                )
+            details.append(
+                "Confirm it still holds, or retire it: "
+                "pjm decision \"...\" --supersedes <id>"
+            )
+            warnings.append({
+                "file": file_path,
+                "severity": SEVERITY_WARN,
+                "type": "possibly_stale",
+                "title": (
+                    f"{len(stale_items)} possibly-stale memories cite this file"
+                    if len(stale_items) != 1
+                    else "1 possibly-stale memory cites this file"
+                ),
+                "details": details,
             })
 
     return warnings

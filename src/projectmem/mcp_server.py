@@ -547,6 +547,13 @@ def add_decision(
                     "choice). Helps precheck_file cite the decision "
                     "when the file is later touched."
     )] = None,
+    supersedes: Annotated[Optional[str], Field(
+        description="Optional event id (evt_...) of a prior decision this "
+                    "one retires. The old event stays in the log tagged "
+                    "(superseded); only the new decision appears in "
+                    "summary.md. Use when precheck_file flags a decision "
+                    "as possibly stale and you are revising it."
+    )] = None,
 ) -> str:
     """Record an architectural or product decision permanently.
 
@@ -555,9 +562,11 @@ def add_decision(
     `pjm wrap` context blocks.
 
     Side effects: appends a `decision` event and updates summary.md.
-    Decisions are append-only — to revise, log a new decision that
-    supersedes the prior one (rather than editing)."""
-    decision.run(summary, location=location)
+    Decisions are append-only — to revise, pass `supersedes` with the old
+    decision's event id instead of editing history."""
+    decision.run(summary, location=location, supersedes=supersedes)
+    if supersedes:
+        return f"Recorded decision (supersedes {supersedes}): {summary}"
     return f"Recorded decision: {summary}"
 
 

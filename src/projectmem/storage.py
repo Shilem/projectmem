@@ -24,15 +24,31 @@ def mem_path(root: Path | None = None) -> Path:
     return (root or Path.cwd()) / MEM_DIR
 
 
+def _is_project_mem_dir(candidate: Path) -> bool:
+    """True if `candidate` is a real, initialized project memory dir.
+
+    `pjm init` always writes config.toml; the machine-wide global store at
+    `~/.projectmem/` never has one. Without this check, walk-up discovery
+    from any directory under $HOME that lacks its own project would land on
+    the global store and misread it as project memory (0.1.4 fix — writes
+    were silently accreting into `~/.projectmem/events.jsonl`).
+    """
+    return (
+        candidate.is_dir()
+        and (candidate / CONFIG_FILE).exists()
+    )
+
+
 def discover_mem_dir(start: Path | None = None) -> Path | None:
     """Walk up from `start` looking for `.projectmem/`, like git does for `.git/`.
 
-    Returns the discovered .projectmem path, or None if none found in any parent.
+    Returns the discovered .projectmem path, or None if none found in any
+    parent. Only initialized project dirs count — see _is_project_mem_dir.
     """
     cur = (start or Path.cwd()).resolve()
     for path in [cur, *cur.parents]:
         candidate = path / MEM_DIR
-        if candidate.exists() and candidate.is_dir():
+        if _is_project_mem_dir(candidate):
             return candidate
     return None
 
@@ -48,8 +64,11 @@ def require_mem_dir(root: Path | None = None) -> Path:
         )
 
     # No explicit root: try CWD first, then walk up the directory tree.
+    # The CWD candidate gets the same initialized-project validation as the
+    # walk-up — running pjm from $HOME must not mistake the global store
+    # (`~/.projectmem/`, no config.toml) for a project.
     cwd_path = mem_path(None)
-    if cwd_path.exists():
+    if _is_project_mem_dir(cwd_path):
         return cwd_path
     found = discover_mem_dir(None)
     if found is not None:

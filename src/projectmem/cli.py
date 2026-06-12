@@ -7,8 +7,10 @@ import typer
 from projectmem.commands import attempt as attempt_command
 from projectmem.commands import auto_capture as auto_capture_command
 from projectmem.commands import backfill as backfill_command
+from projectmem.commands import brief as brief_command
 from projectmem.commands import context as context_command
 from projectmem.commands import decision as decision_command
+from projectmem.commands import export as export_command
 from projectmem.commands import global_cmd as global_command
 from projectmem.commands import fix as fix_command
 from projectmem.commands import hooks as hooks_command
@@ -114,9 +116,19 @@ def fix(
 def decision(
     text: str,
     at: str | None = typer.Option(None, "--at", help="Location (e.g. file:line, class.method)"),
+    supersedes: str | None = typer.Option(
+        None, "--supersedes",
+        help="Event id (or unique prefix) of a prior decision this one retires. "
+             "The old event stays in the log, tagged (superseded); only the new "
+             "one appears in summary.md.",
+    ),
 ) -> None:
-    """Record a decision."""
-    decision_command.run(text, location=at)
+    """Record a decision (optionally retiring a prior one)."""
+    try:
+        decision_command.run(text, location=at, supersedes=supersedes)
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from exc
 
 
 @app.command()
@@ -141,19 +153,48 @@ def search(
         False, "--regex", "-r",
         help="Treat query as a case-insensitive Python regex (enables OR-patterns).",
     ),
+    failed_only: bool = typer.Option(
+        False, "--failed-only",
+        help="Only show failed attempts — the project's catalogue of dead ends.",
+    ),
 ) -> None:
     """Substring (default) or regex search across events.
 
     Default mode is plain substring match. Add --regex for patterns like
     'carousel|favicon' — without it those are treated as literal text.
     """
-    search_command.run(query, regex=regex)
+    search_command.run(query, regex=regex, failed_only=failed_only)
 
 
 @app.command()
 def regenerate() -> None:
     """Rebuild summary.md from events.jsonl."""
     regenerate_command.run()
+
+
+@app.command()
+def brief() -> None:
+    """One-screen session-start briefing: warnings, stale memories, open
+    issues, recent decisions, stack gotchas, and the prevention score."""
+    brief_command.run()
+
+
+@app.command()
+def export(
+    claude_md: bool = typer.Option(
+        True, "--claude-md/--no-claude-md",
+        help="Write the memory block into CLAUDE.md (default).",
+    ),
+    cursor: bool = typer.Option(
+        False, "--cursor", help="Also write the block into .cursorrules.",
+    ),
+    stdout: bool = typer.Option(
+        False, "--stdout", help="Print the block instead of writing files.",
+    ),
+) -> None:
+    """Compile live memory (decisions, gotchas, failed approaches) into
+    CLAUDE.md so agents without MCP inherit the project's judgment."""
+    export_command.run(claude_md=claude_md, cursor=cursor, stdout=stdout)
 
 
 @app.command("visualize")
@@ -222,12 +263,28 @@ def context(
 
 @app.command()
 def precheck(
+    files: list[str] = typer.Argument(
+        None,
+        help="Specific files to check (e.g. `pjm precheck payment.py auth.py`). "
+             "Default: staged files.",
+    ),
     level: str = typer.Option("warn", "--level", "-l", help="Strictness: info, warn, block."),
     working: bool = typer.Option(False, "--working", help="Check working tree instead of staged."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Only output if warnings present."),
+    snooze: str | None = typer.Option(
+        None, "--snooze",
+        help="Silence precheck warnings for a duration (30m, 2h, 1d). "
+             "The snooze is logged to memory, so the silence is audited.",
+    ),
+    unsnooze: bool = typer.Option(
+        False, "--unsnooze", help="Re-enable warnings before the snooze expires.",
+    ),
 ) -> None:
-    """Check staged changes against project memory for warnings."""
-    precheck_command.run(level=level, working=working, quiet=quiet)
+    """Check staged changes (or named files) against project memory."""
+    precheck_command.run(
+        level=level, working=working, quiet=quiet,
+        files=files or None, snooze=snooze, unsnooze=unsnooze,
+    )
 
 
 @app.command()

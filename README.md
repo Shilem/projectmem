@@ -12,6 +12,7 @@
     <a href="https://pypi.org/project/projectmem/"><img src="https://img.shields.io/pypi/dm/projectmem.svg?color=10b981&label=downloads" alt="PyPI Downloads"></a>
     <a href="https://github.com/riponcm/projectmem/stargazers"><img src="https://img.shields.io/github/stars/riponcm/projectmem?style=flat&color=f59e0b&label=stars" alt="GitHub stars"></a>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-3b82f6.svg" alt="License: MIT"></a>
+    <a href="https://arxiv.org/abs/2606.12329"><img src="https://img.shields.io/badge/arXiv-2606.12329-b31b1b.svg" alt="arXiv paper"></a>
     <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Code style: ruff"></a>
   </p>
 
@@ -19,7 +20,8 @@
     <a href="https://projectmem.dev"><b>Website</b></a> •
     <a href="https://projectmem.dev/guide"><b>Guide</b></a> •
     <a href="https://projectmem.dev/demo"><b>Demo</b></a> •
-    <a href="https://projectmem.dev/changelog"><b>Changelog</b></a>
+    <a href="https://projectmem.dev/changelog"><b>Changelog</b></a> •
+    <a href="https://arxiv.org/abs/2606.12329"><b>Paper</b></a>
   </p>
 
   <br />
@@ -44,7 +46,8 @@
 | Doc | What's in it |
 |---|---|
 | **[TUTORIAL.md](TUTORIAL.md)** | 15-minute step-by-step walkthrough — set up projectmem on your own project, watch the lifecycle, see the pre-commit warning fire. |
-| **[CHANGELOG.md](CHANGELOG.md)** | Release history. Latest: v0.1.3 — schema enrichment, secret redaction, conda/venv hook fix, stack auto-detect, MCP config printed at init. |
+| **[CHANGELOG.md](CHANGELOG.md)** | Release history. Latest: v0.1.4 — the accountable-judgment release: stale-memory detection, decision supersede, precheck snooze, `pjm brief`, failed-approach surfacing, CLAUDE.md export, dashboard Overview. |
+| **[Research paper (arXiv:2606.12329)](https://arxiv.org/abs/2606.12329)** | *PROJECTMEM: A Local-First, Event-Sourced Memory and Judgment Layer for AI Coding Agents* — the peer-readable version: design, Memory-as-Governance framing, capability comparison, and the 207-event dogfooding study. |
 | **[LICENSE](LICENSE)** | MIT |
 
 ---
@@ -73,31 +76,38 @@ That's it. `pjm init` installs three git hooks (pre-commit warnings, post-commit
 
 ## Why You'll Love It
 
-- **Pre-Commit Warnings** — `pjm precheck` warns you *before* you commit if you're about to repeat a failed approach, modify a high-churn file, or touch an unresolved issue. No other AI tool does this — it requires the memory layer underneath.
+- **Pre-Commit Warnings** — `pjm precheck` warns you *before* you commit if you're about to repeat a failed approach, modify a high-churn file, or touch an unresolved issue. No other AI tool does this — it requires the memory layer underneath. The warning now lists the dead ends themselves (*"What already failed here: ✗ tried CSS contain:layout"*), and `pjm precheck --snooze 2h` silences it politely — the snooze is itself logged, so even the silence is audited.
+- **Stale-Memory Detection** *(new in 0.1.4)* — other memory tools silently decay or delete old memories; projectmem **never deletes**. Every decision that cites a file is cross-checked against that file's git history — when the file has moved on, the memory is *flagged* ("predates 7 commits to auth.py — confirm or supersede") and a human decides. Retire it cleanly with `pjm decision "new way" --supersedes <id>`: the old event stays in the log, tagged, forever.
+- **Session-Start Briefing** *(new in 0.1.4)* — `pjm brief` answers "where was I?" in one screen: active warnings, possibly-stale memories, open issues, recent decisions, stack gotchas, and your prevention score with a week-over-week delta.
+- **Memory for agents without MCP** *(new in 0.1.4)* — `pjm export --claude-md` compiles live decisions, gotchas, and a "Do NOT retry — these already failed" list into a marked block in CLAUDE.md (or `.cursorrules`). Copilot, plain Claude, any agent that reads the file inherits your project's judgment.
 - **Smart Context Injection** — `pjm wrap claude` (or cursor/aider) injects a token-budgeted memory block into your AI before the session opens. Your AI starts experienced, not blank.
 - **Provable ROI Score** — `pjm score` outputs a letter grade (A+ → F) backed by concrete numbers — debugging hours saved, tokens prevented, dollars protected. CI-friendly JSON output and shields.io badge for your README.
 - **Cross-Project Memory** — Lessons learned in one repo follow you forever. Library gotchas, decisions, and patterns live in `~/.projectmem/global/` and auto-inherit into every new project that matches your stack.
 - **Real-time File Watcher** — Background daemon detects rapid edits to the same file (debugging sessions) between commits. Battery-aware, gitignore-aware, auto-started by `pjm init`.
-- **Native MCP Server** — Plugs into Claude Desktop, Cursor, Antigravity, Codex, and any MCP-compatible tool. 14 native tools force the AI to read context, check files for known failures, and log work automatically. Verified end-to-end against all four clients in v0.0.6.
+- **Native MCP Server** — Plugs into Claude Desktop, Cursor, Antigravity, Codex, and any MCP-compatible tool. 14 native tools force the AI to read context, check files for known failures, and log work automatically. Verified end-to-end against all four clients.
 - **Interactive Dashboard** — `pjm visualize` opens a four-tab D3.js dashboard: Story Map (failure heatmap), ROI Dashboard, Project Map (tree or graph view), Timeline.
 - **100% Local** — No cloud, no telemetry, no accounts. Your code, your memory, your machine.
 
 ## How It Compares
 
-| Capability | **projectmem** | claude-mem | Graphify | mem0 | Cursor |
+| Capability | **projectmem** | claude-mem | agentmemory | mem0 | Letta (MemGPT) |
 |---|:---:|:---:|:---:|:---:|:---:|
-| Core focus | **Memory + Judgment** | Session capture | Static code map | Chat memory | IDE replacement |
-| Captures development history | ✅ classified events | ~ raw log | ❌ | ~ chat-level | ❌ |
-| Records architectural decisions | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Core focus | **Memory + Judgment** | Session capture | Memory engine | Chat memory | Agent framework |
 | Pre-commit failure warnings | ✅ **unique** | ❌ | ❌ | ❌ | ❌ |
-| Cross-project memory | ✅ stack-aware | ~ filter only | ✅ | ~ cloud only | ❌ |
+| Stale memory: **flag, never delete** | ✅ *new in 0.1.4* | ❌ | ❌ silent decay | ❌ | ❌ |
+| Supersede without losing history | ✅ *new in 0.1.4* | ❌ | ❌ | ❌ | ❌ |
+| Captures development history | ✅ typed events | 🟡 | 🟡 | 🟡 | 🟡 |
+| Records architectural decisions | ✅ | ❌ | 🟡 | ❌ | ❌ |
+| Memory for agents without MCP | ✅ CLAUDE.md export | ❌ | ❌ | ❌ | 🟡 |
+| Cross-project memory | ✅ library-scoped | 🟡 | 🟡 | 🟡 | 🟡 |
 | Provable ROI score | ✅ A+ → F + $ | ❌ | ❌ | ❌ | ❌ |
-| Auto-capture from git | ✅ post-commit hooks | ❌ | ~ re-index only | ❌ | ❌ |
-| Real-time file watcher | ✅ opt-in daemon | ❌ | ❌ | ❌ | ❌ |
-| Native MCP server | ✅ 14 tools | ✅ | ✅ | ~ | ❌ |
-| 100% local / no cloud | ✅ | ✅ | ~ | ❌ cloud | ❌ |
-| Tool-agnostic | ✅ | ✅ | ✅ | ~ | ❌ vendor-locked |
-| Price | ✅ Free · MIT | Free | Free · MIT | Paid SaaS | $20/mo |
+| Plain-text, greppable store | ✅ events.jsonl | ❌ | ❌ | ❌ | 🟡 |
+| No daemon, no ports | ✅ stdio + files | ❌ | ❌ | 🟡 | ❌ server + DB |
+| No telemetry, no accounts | ✅ | ❌ default-on | ✅ | ❌ | 🟡 |
+| Native MCP server | ✅ 14 focused tools | ✅ | 🟡 53 tools | 🟡 | 🟡 |
+| Price | ✅ Free · MIT | Free + paid tier | Free | Freemium | Free + cloud |
+
+<sub>✅ yes · 🟡 partial · ❌ no — snapshot June 2026; design capabilities, not benchmark results. claude-mem runs a background worker (port 37777) and enables telemetry by default (v13.5+); agentmemory down-ranks and prunes old memories via decay, mem0 rewrites facts on update, Letta's memory blocks self-edit in place — projectmem never deletes: it flags staleness and lets you decide. Letta requires a running server (Postgres or cloud).</sub>
 
 ## How AI Reads Your Memory (Token Efficiency)
 
@@ -202,7 +212,7 @@ Then **fully quit Antigravity (Cmd+Q on Mac)** and reopen — MCP servers only i
 
 ### Codex
 
-Codex stores MCP config as **TOML** (not JSON) in `~/.codex/config.toml`. There's a UI form at `Settings → MCP Servers → Add MCP Server`, but during v0.0.6 verification the form's **Save button didn't reliably persist** — the file-edit path is faster and more reliable.
+Codex stores MCP config as **TOML** (not JSON) in `~/.codex/config.toml`. There's a UI form at `Settings → MCP Servers → Add MCP Server`, but during cross-client verification the form's **Save button didn't reliably persist** — the file-edit path is faster and more reliable.
 
 **Easiest — edit `~/.codex/config.toml` directly:**
 
@@ -272,7 +282,7 @@ All 14 tools your AI can call:
 | `log_issue(summary, location)` | Immediately when encountering a bug |
 | `record_attempt(summary, outcome)` | Immediately after each fix attempt (outcome: `failed`/`partial`/`worked`) |
 | `record_fix(summary)` | After confirming a fix resolves the issue |
-| `add_decision(summary)` | When making architectural / design decisions |
+| `add_decision(summary, supersedes?)` | When making architectural / design decisions; pass `supersedes` to retire a stale decision without losing history |
 | `add_note(summary)` | When discovering gotchas, setup details, or constraints |
 
 ## CLI Reference
@@ -285,17 +295,19 @@ All 14 tools your AI can call:
 | `pjm log <text>` | Start a new issue / debugging session |
 | `pjm attempt <text> [--failed\|--worked]` | Record a fix attempt outcome |
 | `pjm fix <text>` | Record the confirmed fix and close the issue |
-| `pjm decision <text>` | Record an architectural decision |
+| `pjm decision <text> [--supersedes <id>]` | Record an architectural decision; optionally retire a prior one (old event stays in the log, tagged) |
 | `pjm note <text>` | Record durable context or a gotcha |
 | `pjm show` | Print the current summary |
-| `pjm search <query>` | Plain-text search across all events |
+| `pjm search <query> [--failed-only]` | Plain-text search across all events; `--failed-only` lists the project's dead ends |
+| `pjm brief` | One-screen session-start briefing: warnings, stale memories, open issues, decisions, score |
+| `pjm export [--claude-md\|--cursor]` | Compile live memory into CLAUDE.md / .cursorrules for agents without MCP |
 
-### Intelligence layer (v0.0.6)
+### Intelligence layer
 
 | Command | Purpose |
 |---|---|
 | `pjm watch [--daemon\|--stop\|--status]` | Real-time file churn watcher |
-| `pjm precheck` | Warn about repeating failed approaches before commit |
+| `pjm precheck [--snooze 2h\|--unsnooze]` | Warn about repeating failed approaches before commit; snooze politely (audited) when needed |
 | `pjm wrap <agent>` | Inject token-budgeted memory into Claude/Cursor/Aider |
 | `pjm context [--tokens N]` | Generate token-budgeted project context |
 | `pjm score [--format text\|json\|badge]` | Letter-grade prevention score |
@@ -321,15 +333,22 @@ $ git commit -m "switch auth to JWT"
 projectmem: Pre-Commit Check
 ─────────────────────────────────────────────
   src/auth/middleware.py
-    WARN  3 failed attempts on this file
-           Last failure: Tried switching to JWT middleware
-             (2 days ago)
+    WARN  What already failed here (2 attempts):
+           ✗ tried switching to JWT middleware (2d ago)
+           ✗ patched session timeout to 60min (5d ago)
     WARN  HIGH CHURN: 5 changes in last 30 days
+    WARN  1 possibly-stale memory cites this file
+           decision [evt_9db5a3f8…] "auth uses session
+           cookies, 30min timeout" — predates 7 commits
+           Confirm it still holds, or retire it:
+           pjm decision "..." --supersedes <id>
 ─────────────────────────────────────────────
-2 warning(s). Review before committing.
+3 warning(s). Review before committing.
 
 ~30 min re-debugging just saved.
 ```
+
+Need it quiet for a refactor sprint? `pjm precheck --snooze 2h` — warnings pause, the pause itself is logged, and every commit shows one dim line so silence is never mistaken for a clean check.
 
 ## Privacy & Security
 
@@ -353,6 +372,31 @@ Full security policy and threat model: [SECURITY.md](SECURITY.md) · [Privacy & 
 - [**Model Context Protocol**](https://modelcontextprotocol.io) — Anthropic's open spec that lets AI agents talk to local tools
 - [**watchdog**](https://github.com/gorakhargosh/watchdog) — cross-platform filesystem event monitoring (the heart of `pjm watch`)
 - [**D3.js**](https://d3js.org) — the interactive visualizations in `pjm visualize`
+
+## Research & Citation
+
+projectmem is described in a peer-readable research paper:
+
+> **PROJECTMEM: A Local-First, Event-Sourced Memory and Judgment Layer for AI Coding Agents**
+> Ripon Chandra Malo, Tong Qiu — University of Utah
+> [arXiv:2606.12329](https://arxiv.org/abs/2606.12329) · cs.SE (cross-list cs.AI)
+
+The paper introduces the **Memory-as-Governance** framing — memory that doesn't merely answer the agent but acts on its next action — and reports the design, the deterministic pre-commit judgment gate, a capability comparison against 12 contemporary memory systems, and a two-month, 207-event dogfooding study across 10 real projects.
+
+If projectmem is useful in your research or writing, please cite:
+
+```bibtex
+@misc{malo2026projectmem,
+  title         = {PROJECTMEM: A Local-First, Event-Sourced Memory and
+                   Judgment Layer for AI Coding Agents},
+  author        = {Malo, Ripon Chandra and Qiu, Tong},
+  year          = {2026},
+  eprint        = {2606.12329},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.SE},
+  url           = {https://arxiv.org/abs/2606.12329}
+}
+```
 
 ## License
 

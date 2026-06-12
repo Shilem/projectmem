@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from projectmem.models import Event
+from projectmem.models import Event, superseded_ids
 from projectmem.storage import issues_dir, project_map_path, read_events, summary_path
 
 
@@ -83,7 +83,15 @@ def build_summary(
     project_name = root.name
     now = datetime.now(timezone.utc).date().isoformat()
     issues = group_issue_events(events)
-    decisions = [event for event in events if event.type == "decision"]
+    # Superseded decisions stay in the log (append-only audit trail) but
+    # drop out of the live summary — only the current decision should steer
+    # an AI session. Retired ones remain reachable via `pjm search`.
+    retired = superseded_ids(events)
+    decisions = [
+        event
+        for event in events
+        if event.type == "decision" and event.id not in retired
+    ]
     notes = [event for event in events if event.type == "note"]
 
     lines = [

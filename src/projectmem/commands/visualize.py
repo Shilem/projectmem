@@ -11,6 +11,7 @@ import typer
 from projectmem.models import Event, normalize_timestamp
 from projectmem.storage import read_events, require_mem_dir, project_map_path
 from projectmem.commands.stats import calculate_savings
+from projectmem.commands.score import calculate_score
 
 
 def run(
@@ -35,16 +36,28 @@ def run(
     # 3. Build timeline data for the Timeline tab
     timeline_data = build_timeline_data(events)
 
-    # 4. Generate the HTML
+    # 4. Full score (grade A+→F, hours/usd/tokens, components) for the
+    #    Overview tab's prevention-grade gauge and headline cards. Shares
+    #    the single ROI model in score.calculate_score.
+    score_data = calculate_score([e.__dict__ for e in events])
+
+    # 5. Project name for the sidebar logo — derived automatically from the
+    #    project folder (the parent of .projectmem/), so the dashboard brands
+    #    itself with whatever repo it's run in. Falls back to "project".
+    project_name = mem_dir.parent.name or "project"
+
+    # 6. Generate the HTML
     html_content = (
         VIZ_TEMPLATE
         .replace("{{GRAPH_DATA}}", json.dumps(graph_data))
         .replace("{{PROJECT_MAP}}", json.dumps(project_map_text))
         .replace("{{PROJECT_MAP_GRAPH}}", json.dumps(project_map_graph))
         .replace("{{TIMELINE_DATA}}", json.dumps(timeline_data))
+        .replace("{{SCORE_DATA}}", json.dumps(score_data))
+        .replace("{{PROJECT_NAME}}", json.dumps(project_name))
     )
 
-    # 5. Save and (optionally) open
+    # 7. Save and (optionally) open
     viz_path = Path(output) if output else (mem_dir / "viz.html")
     viz_path.parent.mkdir(parents=True, exist_ok=True)
     viz_path.write_text(html_content, encoding="utf-8")
@@ -214,22 +227,24 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
         :root {
-            --bg: #0b0f19;
-            --bg-glow: radial-gradient(circle at 50% -20%, rgba(59,130,246,0.08), transparent 60%);
-            --surface: #131b2c;
-            --surface2: #1e293b;
-            --surface3: #253347;
-            --border: rgba(255,255,255,0.06);
-            --border-light: rgba(255,255,255,0.1);
-            --text: #f1f5f9;
-            --text-dim: #94a3b8;
-            --text-muted: #64748b;
-            --primary: #3b82f6;
-            --primary-glow: rgba(59,130,246,0.15);
-            --success: #10b981;
-            --error: #ef4444;
-            --warning: #f59e0b;
-            --accent: #818cf8;
+            /* projectmem light "product" theme — matches the poster/brand */
+            --bg: #EEF3F9;
+            --bg-glow: radial-gradient(circle at 50% -10%, rgba(31,111,235,0.06), transparent 55%);
+            --surface: #FFFFFF;
+            --surface2: #F1F5FA;
+            --surface3: #E7EEF6;
+            --border: rgba(11,42,74,0.10);
+            --border-light: rgba(11,42,74,0.18);
+            --text: #13233A;
+            --text-dim: #5A6B82;
+            --text-muted: #8A99AD;
+            --navy: #0B2A4A;
+            --primary: #1F6FEB;
+            --primary-glow: rgba(31,111,235,0.14);
+            --success: #169F84;
+            --error: #E8593B;
+            --warning: #E8A33B;
+            --accent: #6366F1;
         }
         * { margin:0; padding:0; box-sizing:border-box; }
         body {
@@ -249,9 +264,8 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
             justify-content: space-between;
             padding: 0 24px;
             height: 56px;
-            background: rgba(19,27,44,0.8);
-            backdrop-filter: blur(16px);
-            border-bottom: 1px solid var(--border);
+            background: var(--navy);
+            border-bottom: 1px solid rgba(255,255,255,0.06);
             z-index: 10;
             position: relative;
         }
@@ -261,16 +275,14 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
             gap: 10px;
             font-weight: 800;
             font-size: 16px;
-            letter-spacing: -0.5px;
-            background: linear-gradient(135deg, #60a5fa, #818cf8);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.3px;
+            color: #fff;
         }
         .pulse-dot {
             width: 8px; height: 8px;
-            background: #60a5fa;
+            background: #3FE0B0;
             border-radius: 50%;
-            box-shadow: 0 0 8px #60a5fa;
+            box-shadow: 0 0 8px #3FE0B0;
             animation: pulse 2.5s infinite;
         }
         @keyframes pulse {
@@ -282,11 +294,11 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
             display: flex;
             gap: 20px;
             font-size: 12px;
-            color: var(--text-dim);
+            color: rgba(255,255,255,0.60);
             font-weight: 500;
         }
         .header-stats .val {
-            color: var(--text);
+            color: #fff;
             font-weight: 700;
             font-size: 13px;
         }
@@ -317,8 +329,43 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
         .tab svg { width:14px; height:14px; opacity:0.7; }
         .tab.active svg { opacity:1; }
 
+        /* ── App shell (sidebar + main) ── */
+        .app { display: flex; height: 100vh; }
+        .main-area { flex: 1; height: 100vh; position: relative; overflow: hidden; min-width: 0; }
+        .side {
+            width: 232px; flex-shrink: 0; height: 100vh; overflow-y: auto;
+            background: var(--navy); color: #fff; padding: 20px 14px;
+            display: flex; flex-direction: column;
+        }
+        .brand { display: flex; align-items: center; gap: 10px; padding: 2px 6px 4px; margin-bottom: 18px; }
+        .logo-mark { display: flex; flex-shrink: 0; }
+        .brand-name {
+            font-weight: 800; font-size: 18px; letter-spacing: -0.2px; color: #fff;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .navlbl { font-size: 10px; font-weight: 700; letter-spacing: 1.4px; color: #6E8BAE; margin: 14px 9px 7px; }
+        .nav {
+            display: flex; align-items: center; gap: 11px; width: 100%;
+            padding: 9px 11px; margin-bottom: 2px; border: none; border-radius: 9px;
+            background: transparent; color: #C5D6EC; font-size: 13.5px; font-weight: 500;
+            font-family: inherit; cursor: pointer; text-align: left; transition: background 0.15s, color 0.15s;
+        }
+        .nav:hover { background: rgba(255,255,255,0.06); color: #fff; }
+        .nav.active { background: var(--primary); color: #fff; font-weight: 600; }
+        .nic { width: 17px; height: 17px; flex-shrink: 0; fill: none; stroke: currentColor;
+               stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: 0.95; }
+        .ws-stats { display: flex; gap: 7px; padding: 2px 6px; }
+        .ws-stat { flex: 1; background: #0E3157; border-radius: 9px; padding: 9px 6px; text-align: center; }
+        .ws-stat .wv { display: block; font-size: 18px; font-weight: 800; color: #fff; line-height: 1; }
+        .ws-stat .wl { display: block; font-size: 9.5px; color: #8FA8C6; margin-top: 4px; font-weight: 600; }
+        .side-ft {
+            margin-top: auto; padding: 12px; background: #0E3157; border-radius: 10px;
+            font-size: 11px; color: #9FB6D2; line-height: 1.55;
+        }
+        .side-ft b { color: #fff; font-weight: 600; }
+
         /* ── Panels ── */
-        .panels { height: calc(100vh - 56px - 38px); position: relative; }
+        .panels { height: 100%; position: relative; }
         .panel {
             position: absolute; inset: 0;
             opacity: 0; pointer-events: none;
@@ -329,7 +376,7 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
         /* ── Shared ── */
         .map-tooltip {
             position: absolute;
-            background: rgba(19,27,44,0.95);
+            background: rgba(255,255,255,0.97);
             backdrop-filter: blur(16px);
             padding: 12px 16px;
             border-radius: 10px;
@@ -340,7 +387,7 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
             transition: opacity 0.15s;
             max-width: 340px;
             z-index: 100;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            box-shadow: 0 8px 28px rgba(11,42,74,0.18);
             color: var(--text);
             line-height: 1.5;
         }
@@ -349,13 +396,13 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
             position: absolute;
             top: 16px; right: 16px;
             display: flex; flex-direction: column; gap: 8px;
-            background: rgba(19,27,44,0.9);
+            background: rgba(255,255,255,0.94);
             backdrop-filter: blur(16px);
             padding: 14px 18px;
             border-radius: 12px;
             border: 1px solid var(--border);
             font-size: 11px;
-            box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+            box-shadow: 0 4px 20px rgba(11,42,74,0.12);
         }
         .map-legend-item { display:flex; align-items:center; gap:8px; color: var(--text-dim); }
         .dot { width:8px; height:8px; border-radius:50%; }
@@ -586,49 +633,182 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
         /* ── Animated counter ── */
         @keyframes fadeInUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
         .animate-in { animation: fadeInUp 0.4s ease forwards; }
+
+        /* ═══ Overview (landing) ═══ */
+        .ov-scroll { height:100%; overflow-y:auto; padding:22px 26px 30px; }
+        .ov-head { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:16px; max-width:1320px; }
+        .ov-title { font-size:20px; font-weight:800; color:var(--navy); letter-spacing:-0.3px; }
+        .ov-sub { font-size:12.5px; color:var(--text-dim); margin-top:3px; }
+        .ov-pill { display:inline-flex; align-items:center; gap:7px; background:#fff; border:1px solid var(--border);
+                   border-radius:20px; padding:6px 13px; font-size:11.5px; color:var(--text-dim); font-weight:600; white-space:nowrap; }
+        .ov-g { width:8px; height:8px; border-radius:50%; background:var(--success); box-shadow:0 0 7px var(--success); }
+        .ov-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; max-width:1320px; }
+        .ov-card { background:var(--surface); border:1px solid var(--border); border-radius:14px;
+                   padding:16px 18px; box-shadow:0 1px 0 rgba(16,47,82,.03); }
+        .ov-ph { display:flex; align-items:center; gap:9px; margin-bottom:3px; }
+        .ov-tag { width:26px; height:26px; border-radius:8px; display:flex; align-items:center; justify-content:center; }
+        .ov-tag svg { width:15px; height:15px; fill:none; stroke:#fff; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+        .ov-ph h2 { font-size:14.5px; font-weight:700; color:var(--navy); }
+        .ov-d { font-size:11.5px; color:var(--text-muted); }
+        .ov-jump { margin-left:auto; font-size:11px; font-weight:700; color:var(--primary); cursor:pointer; opacity:.8; }
+        .ov-jump:hover { opacity:1; text-decoration:underline; }
+        .ov-psub { font-size:11.5px; color:var(--text-dim); margin:0 0 12px 35px; }
+        /* heatmap rows */
+        .ov-row { display:flex; align-items:center; gap:10px; margin:8px 0; }
+        .ov-row .fn { width:150px; font:12px ui-monospace,Menlo,monospace; color:#33455E; text-align:right;
+                      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .ov-bar { height:19px; border-radius:5px; position:relative; flex:1; background:var(--surface2); overflow:hidden; }
+        .ov-bar i { position:absolute; left:0; top:0; bottom:0; border-radius:5px; display:block; transition:width .7s cubic-bezier(.4,0,.2,1); }
+        .ov-row .n { width:78px; font-size:11px; color:var(--text-dim); font-weight:600; }
+        .ov-row .n b { color:var(--error); }
+        .ov-empty { color:var(--text-muted); font-size:12px; padding:18px 4px; }
+        .ov-legend { display:flex; gap:14px; align-items:center; margin-top:11px; font-size:11px; color:var(--text-dim); }
+        .ov-sw { display:inline-block; width:26px; height:9px; border-radius:3px; vertical-align:middle; margin-right:5px; }
+        /* roi */
+        .ov-roi { display:grid; grid-template-columns:1fr 132px; grid-auto-rows:auto; gap:12px; }
+        .ov-stat { background:var(--surface2); border:1px solid var(--border); border-radius:11px; padding:12px 14px; }
+        .ov-stat .k { font-size:10.5px; color:var(--text-dim); font-weight:700; letter-spacing:.3px; }
+        .ov-stat .v { font-size:25px; font-weight:800; color:var(--navy); margin-top:5px; line-height:1; }
+        .ov-stat .v small { font-size:13px; font-weight:700; color:var(--text-muted); }
+        .ov-stat .t { font-size:10px; color:var(--success); font-weight:700; margin-top:6px; }
+        .ov-gauge { grid-row:1/3; background:var(--surface2); border:1px solid var(--border); border-radius:11px;
+                    display:flex; flex-direction:column; align-items:center; justify-content:center; padding:6px; }
+        .ov-gauge .lbl { font-size:10.5px; color:var(--text-dim); font-weight:700; margin-bottom:2px; }
+        .ov-gauge .gr { font-size:12.5px; color:var(--text-dim); font-weight:700; margin-top:2px; }
+        /* mini map */
+        .ov-mapwrap { display:flex; justify-content:center; }
+        #ov-map .ovn-label { font:11px ui-monospace,Menlo,monospace; fill:#33455E; }
+        /* timeline swimlanes */
+        .ov-lane { display:flex; align-items:center; gap:8px; margin:9px 0; }
+        .ov-lane .ln { width:72px; font-size:11.5px; font-weight:700; text-align:right; }
+        .ov-track { flex:1; height:22px; position:relative; border-bottom:1px dashed var(--border-light); }
+        .ov-ev { position:absolute; top:3px; width:14px; height:14px; border-radius:50%; border:2px solid #fff;
+                 transform:translateX(-50%); box-shadow:0 1px 2px rgba(16,47,82,.18); }
+        .ov-axis { display:flex; justify-content:space-between; margin:6px 0 0 80px; font:10.5px ui-monospace,Menlo,monospace; color:var(--text-muted); }
+        .ov-foot { display:flex; gap:16px; align-items:center; margin-top:12px; font-size:11px; color:var(--text-dim); flex-wrap:wrap; }
+        @media (max-width:1080px){ .ov-grid{ grid-template-columns:1fr; } }
     </style>
 </head>
 <body>
 
-    <!-- Header -->
-    <div class="header">
-        <div class="header-brand">
-            <div class="pulse-dot"></div>
-            projectmem
-        </div>
-        <div class="header-stats">
-            <span>Tokens Saved: <span class="val" id="hdr-tokens">0</span></span>
-            <span>Issues Resolved: <span class="val" id="hdr-issues">0</span></span>
-            <span>Events: <span class="val" id="hdr-events">0</span></span>
-            <span>Auto-captured: <span class="val" id="hdr-auto">0</span></span>
-        </div>
-    </div>
+    <div class="app">
 
-    <!-- Tabs -->
-    <div class="tabs">
-        <div class="tab active" data-panel="story">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
-            Story Map
+    <!-- Sidebar -->
+    <aside class="side">
+        <div class="brand">
+            <span class="logo-mark">
+                <svg width="30" height="30" viewBox="0 0 32 32" fill="none">
+                    <defs><linearGradient id="lm" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2D7DF6"/><stop offset="1" stop-color="#169F84"/></linearGradient></defs>
+                    <rect width="32" height="32" rx="9" fill="url(#lm)"/>
+                    <path d="M16 7 L24 16 L16 25 L8 16 Z" stroke="#fff" stroke-width="2" fill="none" stroke-linejoin="round"/>
+                    <circle cx="16" cy="16" r="2.6" fill="#fff"/>
+                </svg>
+            </span>
+            <span class="brand-name" id="brand-name" title="project">project</span>
         </div>
-        <div class="tab" data-panel="roi">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-            ROI Dashboard
+
+        <div class="navlbl">VISUALIZE</div>
+        <button class="nav active" data-panel="overview">
+            <svg class="nic" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+            <span>Overview</span></button>
+        <button class="nav" data-panel="story">
+            <svg class="nic" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
+            <span>Story Map</span></button>
+        <button class="nav" data-panel="roi">
+            <svg class="nic" viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+            <span>ROI Dashboard</span></button>
+        <button class="nav" data-panel="map">
+            <svg class="nic" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.6"/><circle cx="5" cy="19" r="2.6"/><circle cx="19" cy="19" r="2.6"/><line x1="12" y1="7.5" x2="5.8" y2="16.6"/><line x1="12" y1="7.5" x2="18.2" y2="16.6"/></svg>
+            <span>Project Map</span></button>
+        <button class="nav" data-panel="timeline">
+            <svg class="nic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
+            <span>Timeline</span></button>
+
+        <div class="navlbl">WORKSPACE</div>
+        <div class="ws-stats">
+            <div class="ws-stat"><span class="wv" id="ws-events">0</span><span class="wl">events</span></div>
+            <div class="ws-stat"><span class="wv" id="ws-fixes">0</span><span class="wl">fixes</span></div>
+            <div class="ws-stat"><span class="wv" id="ws-grade">—</span><span class="wl">grade</span></div>
         </div>
-        <div class="tab" data-panel="map">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="3"/><circle cx="5" cy="19" r="3"/><circle cx="19" cy="19" r="3"/><line x1="12" y1="8" x2="5" y2="16"/><line x1="12" y1="8" x2="19" y2="16"/></svg>
-            Project Map
+
+        <div class="side-ft">
+            Generated from<br><b>.projectmem/events.jsonl</b><br>
+            <span style="opacity:.75">100% local · no telemetry</span><br>
+            <b style="color:#7FB2F2">$ pjm visualize</b>
         </div>
-        <div class="tab" data-panel="timeline">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-            Timeline
-        </div>
-    </div>
+    </aside>
+
+    <!-- Main -->
+    <div class="main-area">
 
     <!-- Panels -->
     <div class="panels">
 
+        <!-- Overview — all four at a glance -->
+        <div class="panel active" id="panel-overview">
+          <div class="ov-scroll">
+            <div class="ov-head">
+              <div>
+                <h1 class="ov-title">Workspace overview</h1>
+                <div class="ov-sub">A single live view of what your project has learned — failures, ROI, structure, and history.</div>
+              </div>
+              <span class="ov-pill"><span class="ov-g"></span> live · regenerated on every event</span>
+            </div>
+            <div class="ov-grid">
+
+              <!-- 1. Story Map: failure heatmap -->
+              <section class="ov-card">
+                <div class="ov-ph"><span class="ov-tag" style="background:var(--error)"><svg viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg></span>
+                  <h2>Story Map</h2><span class="ov-d">failure heatmap</span>
+                  <span class="ov-jump" data-go="story">open ↗</span></div>
+                <div class="ov-psub">Which files burned the most effort — length = effort, color = failure intensity.</div>
+                <div id="ov-story"></div>
+              </section>
+
+              <!-- 2. ROI Dashboard: cards + grade gauge -->
+              <section class="ov-card">
+                <div class="ov-ph"><span class="ov-tag" style="background:var(--success)"><svg viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg></span>
+                  <h2>ROI Dashboard</h2><span class="ov-d">value captured</span>
+                  <span class="ov-jump" data-go="roi">open ↗</span></div>
+                <div class="ov-psub">Tokens, hours and dollars saved — plus a prevention grade from A+ to F.</div>
+                <div class="ov-roi">
+                  <div class="ov-stat"><div class="k">TOKENS SAVED</div><div class="v" id="ov-tok">0</div><div class="t" id="ov-tok-t">▲ since project start</div></div>
+                  <div class="ov-gauge">
+                    <div class="lbl">Prevention grade</div>
+                    <svg width="120" height="94" viewBox="0 0 120 94"><g id="ov-gauge-g"></g></svg>
+                    <div class="gr" id="ov-grade-sub">0 / 100</div>
+                  </div>
+                  <div class="ov-stat"><div class="k">HOURS SAVED</div><div class="v" id="ov-hrs">0<small> h</small></div><div class="t">▲ repeat-fix time avoided</div></div>
+                  <div class="ov-stat"><div class="k">USD SAVED <span style="color:var(--text-muted)">(API)</span></div><div class="v" id="ov-usd">$0</div><div class="t">▲ compounds each session</div></div>
+                </div>
+              </section>
+
+              <!-- 3. Project Map: mini graph -->
+              <section class="ov-card">
+                <div class="ov-ph"><span class="ov-tag" style="background:var(--primary)"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.6"/><circle cx="5" cy="19" r="2.6"/><circle cx="19" cy="19" r="2.6"/><line x1="12" y1="7.5" x2="5.8" y2="16.6"/><line x1="12" y1="7.5" x2="18.2" y2="16.6"/></svg></span>
+                  <h2>Project Map</h2><span class="ov-d">structure</span>
+                  <span class="ov-jump" data-go="map">open ↗</span></div>
+                <div class="ov-psub">Repo structure as a graph — node size = activity, red ring = files with failures.</div>
+                <div class="ov-mapwrap"><svg id="ov-map" width="100%" height="232"></svg></div>
+              </section>
+
+              <!-- 4. Timeline: swimlanes -->
+              <section class="ov-card">
+                <div class="ov-ph"><span class="ov-tag" style="background:var(--warning)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg></span>
+                  <h2>Timeline</h2><span class="ov-d">project history</span>
+                  <span class="ov-jump" data-go="timeline">open ↗</span></div>
+                <div class="ov-psub">issues → attempts → fixes → decisions, laid out over time.</div>
+                <div id="ov-timeline"></div>
+                <div class="ov-axis" id="ov-axis"></div>
+                <div class="ov-foot" id="ov-foot"></div>
+              </section>
+
+            </div>
+          </div>
+        </div>
+
         <!-- Story Map -->
-        <div class="panel active" id="panel-story">
+        <div class="panel" id="panel-story">
             <svg id="canvas"></svg>
             <div class="map-legend">
                 <div class="map-legend-item"><div class="dot" style="background:var(--primary)"></div> Issue / Event</div>
@@ -714,6 +894,8 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
             </div>
         </div>
     </div>
+    </div><!-- /main-area -->
+    </div><!-- /app -->
 
     <script>
     // ── Data Injection ──
@@ -721,6 +903,8 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
     const projectMap = {{PROJECT_MAP}};
     const projectMapGraph = {{PROJECT_MAP_GRAPH}};
     const timelineData = {{TIMELINE_DATA}};
+    const score = {{SCORE_DATA}};
+    const projectName = {{PROJECT_NAME}};
 
     // ── Animated Counter ──
     function animateValue(el, end, prefix='', suffix='', duration=800) {
@@ -737,24 +921,141 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
         requestAnimationFrame(step);
     }
 
-    // ── Tab Navigation ──
-    document.querySelectorAll('.tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-            tab.classList.add('active');
-            document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
-        });
-    });
+    // ── Sidebar nav + dynamic branding ──
+    function activateTab(name) {
+        document.querySelectorAll('.nav').forEach(t => t.classList.toggle('active', t.dataset.panel === name));
+        document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+    }
+    document.querySelectorAll('.nav').forEach(n => n.addEventListener('click', () => activateTab(n.dataset.panel)));
+    (function brand() {
+        const bn = document.getElementById('brand-name');
+        if (bn && projectName) { bn.textContent = projectName; bn.title = projectName; }
+        document.title = (projectName || 'projectmem') + ' · visualize';
+    })();
 
-    // ── Header Stats ──
+    // ── Workspace stats (sidebar) ──
     const resolvedCount = timelineData.filter(e => e.type === 'fix').length;
     const autoCount = timelineData.filter(e => e.auto_captured).length;
     const manualCount = timelineData.length - autoCount;
-    animateValue(document.getElementById('hdr-tokens'), data.stats.total_tokens);
-    animateValue(document.getElementById('hdr-issues'), resolvedCount);
-    animateValue(document.getElementById('hdr-events'), timelineData.length);
-    animateValue(document.getElementById('hdr-auto'), autoCount);
+    animateValue(document.getElementById('ws-events'), timelineData.length);
+    animateValue(document.getElementById('ws-fixes'), resolvedCount);
+    (function(){ const g = document.getElementById('ws-grade'); if (g) g.textContent = score.grade || '—'; })();
+
+    // ══════════════════════════════════════════
+    // TAB 0: OVERVIEW — all four at a glance
+    // ══════════════════════════════════════════
+    document.querySelectorAll('.ov-jump').forEach(j => j.addEventListener('click', () => activateTab(j.dataset.go)));
+
+    const OV_NOISE = /__pycache__|\\.pyc$|\\.DS_Store|\\.egg-info/;
+
+    // ── 1. Story Map: failure heatmap (top files by effort) ──
+    (function ovStory() {
+        const mentions = {};
+        data.links.forEach(l => { const t = typeof l.target === 'object' ? l.target.id : l.target; mentions[t] = (mentions[t]||0)+1; });
+        const ranked = data.nodes
+            .filter(n => n.type === 'file' && !OV_NOISE.test(n.id))
+            .map(n => ({ f:n.id, fails:n.failures||0, effort:(n.failures||0)*3 + (mentions[n.id]||0) }))
+            .sort((a,b) => b.effort - a.effort || b.fails - a.fails)
+            .slice(0, 6);
+        const el = document.getElementById('ov-story');
+        if (!ranked.length) { el.innerHTML = '<div class="ov-empty">No file activity tracked yet — log an issue or attempt against a file to see it here.</div>'; return; }
+        const maxEffort = Math.max(...ranked.map(d => d.effort), 1);
+        const heat = f => ['#DCE6F1','#FBD9CF','#F1956F','#E8593B'][Math.min(f,3)];
+        el.innerHTML = ranked.map((d,i) => {
+            const short = d.f.split('/').slice(-2).join('/');
+            const w = Math.max((d.effort/maxEffort)*100, 6);
+            return '<div class="ov-row"><div class="fn" title="'+d.f+'">'+short+'</div>'
+                + '<div class="ov-bar"><i id="ovb-'+i+'" style="width:0%;background:'+heat(d.fails)+'"></i></div>'
+                + '<div class="n">'+(d.fails>0?'<b>'+d.fails+'</b> failed':'active')+'</div></div>';
+        }).join('') + '<div class="ov-legend"><span><span class="ov-sw" style="background:linear-gradient(90deg,#FBD9CF,#E8593B)"></span>more failed attempts</span>'
+            + '<span style="margin-left:auto">'+score.components.failed_approaches+' failed · '+score.components.fixes_with_context+' fixes recorded</span></div>';
+        ranked.forEach((d,i) => setTimeout(() => { const b=document.getElementById('ovb-'+i); if(b) b.style.width=Math.max((d.effort/maxEffort)*100,6)+'%'; }, 120+i*70));
+    })();
+
+    // ── 2. ROI Dashboard: cards + prevention-grade gauge ──
+    (function ovRoi() {
+        const v = score.value || {};
+        animateValue(document.getElementById('ov-tok'), v.tokens_saved||0, '', '', 1000);
+        document.getElementById('ov-hrs').innerHTML = '~'+(v.debugging_hours_saved||0).toFixed(1)+'<small> h</small>';
+        document.getElementById('ov-usd').textContent = '$'+(v.usd_saved||0).toFixed(2);
+        document.getElementById('ov-grade-sub').textContent = (score.score||0)+' / 100';
+        // gauge
+        const cx=60, cy=80, r=47, val=Math.max(0, Math.min(100, score.score||0));
+        const col = val>=85 ? '#169F84' : val>=70 ? '#1F6FEB' : val>=50 ? '#E8A33B' : '#E8593B';
+        const pol = a => { const rad=(180-a*1.8)*Math.PI/180; return [cx+r*Math.cos(rad), cy-r*Math.sin(rad)]; };
+        const arc = (a0,a1,c,w) => { const [x0,y0]=pol(a0),[x1,y1]=pol(a1); const big=(a1-a0)>100?1:0;
+            return '<path d="M'+x0+' '+y0+' A'+r+' '+r+' 0 '+big+' 1 '+x1+' '+y1+'" fill="none" stroke="'+c+'" stroke-width="'+w+'" stroke-linecap="round"/>'; };
+        let s = arc(0,100,'#E7EEF6',11) + arc(0.5,Math.max(val,0.6),col,11);
+        const [nx,ny] = pol(val);
+        s += '<circle cx="'+nx+'" cy="'+ny+'" r="5.5" fill="#0B2A4A"/>';
+        s += '<text x="60" y="64" text-anchor="middle" font-size="30" font-weight="800" fill="#0B2A4A">'+(score.grade||'—')+'</text>';
+        document.getElementById('ov-gauge-g').innerHTML = s;
+    })();
+
+    // ── 3. Project Map: compact node graph ──
+    (function ovMap() {
+        const svgEl = document.getElementById('ov-map');
+        const W = Math.max(svgEl.getBoundingClientRect().width || 540, 300), H = 232, pad = 26;
+        if (!projectMapGraph.nodes.length) {
+            svgEl.innerHTML = '<text x="'+(W/2)+'" y="'+(H/2)+'" text-anchor="middle" fill="#8A99AD" font-size="12.5">Run <tspan font-family="monospace" fill="#5A6B82">pjm map</tspan> to generate a project map.</text>';
+            return;
+        }
+        const failByFile = {}; data.nodes.forEach(n => { if (n.type==='file' && n.failures>0) failByFile[n.id]=n.failures; });
+        const deg = {}; projectMapGraph.links.forEach(l => { const s=l.source.id||l.source, t=l.target.id||l.target; deg[s]=(deg[s]||0)+1; deg[t]=(deg[t]||0)+1; });
+        const cap = [...projectMapGraph.nodes].sort((a,b)=>(deg[b.id]||0)-(deg[a.id]||0)).slice(0,10);
+        const capIds = new Set(cap.map(n=>n.id));
+        const mlinks = projectMapGraph.links
+            .map(l => ({ source:l.source.id||l.source, target:l.target.id||l.target }))
+            .filter(l => capIds.has(l.source) && capIds.has(l.target));
+        const sim = d3.forceSimulation(cap)
+            .force('charge', d3.forceManyBody().strength(-210))
+            .force('link', d3.forceLink(mlinks).id(d=>d.id).distance(52))
+            .force('center', d3.forceCenter(W/2, H/2))
+            .force('collide', d3.forceCollide(24))
+            .stop();
+        for (let i=0;i<200;i++) sim.tick();
+        cap.forEach(n => { n.x=Math.max(pad,Math.min(W-pad,n.x)); n.y=Math.max(pad,Math.min(H-pad,n.y)); });
+        const R = n => n.type==='folder' ? 13 : 9;
+        let s = '';
+        mlinks.forEach(l => { const a=cap.find(n=>n.id===l.source), b=cap.find(n=>n.id===l.target); if(a&&b) s+='<line x1="'+a.x+'" y1="'+a.y+'" x2="'+b.x+'" y2="'+b.y+'" stroke="#CBD7E6" stroke-width="2"/>'; });
+        cap.forEach(n => {
+            if (failByFile[n.id]) s += '<circle cx="'+n.x+'" cy="'+n.y+'" r="'+(R(n)+5)+'" fill="none" stroke="#E8593B" stroke-width="2.5" stroke-dasharray="3 3"/>';
+            s += '<circle cx="'+n.x+'" cy="'+n.y+'" r="'+R(n)+'" fill="'+(n.type==='folder'?'#1F6FEB':'#169F84')+'"/>';
+            const lbl = (n.label||'').slice(0,16);
+            s += '<text class="ovn-label" x="'+n.x+'" y="'+(n.y+R(n)+13)+'" text-anchor="middle">'+lbl+'</text>';
+        });
+        svgEl.innerHTML = s;
+    })();
+
+    // ── 4. Timeline: swimlanes ──
+    (function ovTimeline() {
+        const lanes = [
+            { key:'issue',    c:'#E8593B' },
+            { key:'attempt',  c:'#E8A33B' },
+            { key:'fix',      c:'#169F84' },
+            { key:'decision', c:'#1F6FEB' },
+        ];
+        const dated = timelineData.map(e => ({ type:e.type, t:new Date(e.timestamp).getTime() }))
+            .filter(e => !isNaN(e.t));
+        const wrap = document.getElementById('ov-timeline');
+        if (!dated.length) { wrap.innerHTML = '<div class="ov-empty">No dated events yet.</div>'; document.getElementById('ov-foot').textContent=''; return; }
+        const tMin = Math.min(...dated.map(e=>e.t)), tMax = Math.max(...dated.map(e=>e.t));
+        const span = Math.max(tMax - tMin, 1);
+        const xOf = t => 2 + ((t - tMin)/span)*96;
+        wrap.innerHTML = lanes.map(L => {
+            let pts = dated.filter(e => e.type === L.key).map(e => xOf(e.t));
+            if (pts.length > 46) { const step=Math.ceil(pts.length/46); pts = pts.filter((_,i)=>i%step===0); }
+            const dots = pts.map(x => '<span class="ov-ev" style="left:'+x+'%;background:'+L.c+'"></span>').join('');
+            return '<div class="ov-lane"><div class="ln" style="color:'+L.c+'">'+L.key+'</div><div class="ov-track">'+dots+'</div></div>';
+        }).join('');
+        // axis: 6 evenly spaced dates
+        const fmt = ms => new Date(ms).toLocaleDateString('en-US',{month:'short', day:'numeric'});
+        const ticks = []; for (let i=0;i<6;i++) ticks.push(fmt(tMin + span*i/5));
+        document.getElementById('ov-axis').innerHTML = ticks.map(t => '<span>'+t+'</span>').join('');
+        document.getElementById('ov-foot').innerHTML = lanes.map(L =>
+            '<span><span class="ov-sw" style="width:11px;height:11px;border-radius:50%;background:'+L.c+'"></span>'+L.key+'</span>').join('')
+            + '<span style="margin-left:auto">'+timelineData.length+' events · '+fmt(tMin)+' – '+fmt(tMax)+'</span>';
+    })();
 
     // ══════════════════════════════════════════
     // TAB 1: Story Map — Filter noise, add glow
@@ -840,7 +1141,7 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
         .data(cleanNodes.filter(d => d.type==='event' || (d.failures||0)>0))
         .enter().append("text")
         .attr("font-size","10px")
-        .attr("fill", d => d.type==='event' ? '#94a3b8' : '#64748b')
+        .attr("fill", d => d.type==='event' ? '#5A6B82' : '#475569')
         .attr("dx",12).attr("dy",".35em")
         .text(d => d.label);
 
@@ -1159,7 +1460,7 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
             .data(projectMapGraph.nodes).enter().append("text")
             .attr("font-size", d=>d.type==='folder'?'12px':'11px')
             .attr("font-weight", d=>d.type==='folder'?'600':'400')
-            .attr("fill", d=>d.type==='folder'?'#c4b5fd':'#e2e8f0')
+            .attr("fill", d=>d.type==='folder'?'#4F46E5':'#33455E')
             .attr("dx",16).attr("dy",".35em")
             .text(d=>d.label);
 

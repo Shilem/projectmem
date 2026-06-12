@@ -2,19 +2,36 @@ from __future__ import annotations
 
 import typer
 
-from projectmem.models import Event
-from projectmem.storage import append_event, get_git_commit
+from projectmem.models import Event, resolve_event_ref
+from projectmem.storage import append_event, get_git_commit, read_events
 from projectmem.summary import regenerate_summary
 
 
-def run(text: str, location: str | None = None) -> Event:
+def run(
+    text: str,
+    location: str | None = None,
+    supersedes: str | None = None,
+) -> Event:
+    superseded = None
+    if supersedes:
+        # Resolve BEFORE appending so a bad reference never half-writes.
+        # Raises ValueError — the CLI converts it to exit code 1, the MCP
+        # safe_tool wrapper converts it to a readable error string.
+        superseded = resolve_event_ref(read_events(), supersedes)
     event = Event(
         type="decision",
         summary=text,
         git_commit=get_git_commit(),
         location=location,
+        supersedes=superseded.id if superseded else None,
     )
     append_event(event)
     regenerate_summary()
-    typer.echo("Recorded decision")
+    if superseded:
+        typer.echo(
+            f'Recorded decision (supersedes {superseded.id}: '
+            f'"{superseded.summary[:60]}")'
+        )
+    else:
+        typer.echo("Recorded decision")
     return event

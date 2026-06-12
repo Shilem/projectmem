@@ -4,19 +4,23 @@ build-backend = "hatchling.build"
 
 [project]
 name = "projectmem"
-version = "0.1.3"
+version = "0.1.4"
 description = "Local-first memory + judgment layer for AI coding agents — warns before repeating failed fixes."
 authors = [{ name = "Ripon Chandra Malo" }]
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
+keywords = [
+  "ai", "memory", "mcp", "model-context-protocol", "claude", "cursor",
+  "coding-agent", "developer-tools", "pre-commit", "local-first",
+]
 dependencies = [
   "typer>=0.12",
   "mcp>=0.1.0",
   "watchdog>=4.0",
 ]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 5 - Production/Stable",
   "Environment :: Console",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
@@ -34,9 +38,12 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/riponcm/projectmem"
+Homepage = "https://projectmem.dev"
 Repository = "https://github.com/riponcm/projectmem"
+Documentation = "https://projectmem.dev/guide"
+Changelog = "https://projectmem.dev/changelog"
 Issues = "https://github.com/riponcm/projectmem/issues"
+Paper = "https://arxiv.org/abs/2606.12329"
 
 [project.scripts]
 projectmem = "projectmem.cli:main"

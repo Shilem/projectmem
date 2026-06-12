@@ -91,3 +91,21 @@ brand/logo-mark-mono-navy.svg
 brand/logo-mark-mono-ink.svg
 brand/logo-wordmark.svg
 brand/CHANGELOG.md
+
+# ── Private research / publication assets (NEVER publish) ──────
+# arXiv paper draft, LaTeX sources, and figures — kept off GitHub.
+arxiv/
+/arxiv/
+# Poster + research dossier folder (note: the directory name has a
+# trailing space). Cover both spellings to be safe.
+poster resource/
+poster resource /
+/poster resource/
+/poster resource /
+
+# ── LaTeX / build scratch logs (poster & paper compiles) ───────
+*.log
+*.aux
+*.out
+*.bbl
+*.blg

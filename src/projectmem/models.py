@@ -83,6 +83,10 @@ class Event:
     capture_source: str | None = None
     capture_confidence: str | None = None
     git_message: str | None = None
+    # Supersede pointer (0.1.4): this event retires the referenced event id.
+    # The back-reference is computed at read time — events.jsonl stays
+    # append-only and history is never mutated.
+    supersedes: str | None = None
 
     def __post_init__(self) -> None:
         if self.type not in VALID_EVENT_TYPES:
@@ -119,4 +123,41 @@ class Event:
             capture_source=data.get("capture_source"),
             capture_confidence=data.get("capture_confidence"),
             git_message=data.get("git_message"),
+            supersedes=data.get("supersedes"),
         )
+
+
+def superseded_ids(events: list["Event"]) -> set[str]:
+    """IDs of events retired by a later event's `supersedes` pointer.
+
+    Computed at read time so the log stays append-only — no event line is
+    ever rewritten when something supersedes it.
+    """
+    return {e.supersedes for e in events if e.supersedes}
+
+
+def resolve_event_ref(events: list["Event"], ref: str) -> "Event":
+    """Resolve a user-supplied event reference to a single event.
+
+    Accepts a full event id (``evt_ab12...``) or any unique prefix of the
+    hex part (``ab12``). Raises ValueError when nothing matches or the
+    prefix is ambiguous — the caller surfaces that message to the user.
+    """
+    needle = ref.strip()
+    if not needle:
+        raise ValueError("Empty event reference")
+    candidates = [e for e in events if e.id == needle]
+    if not candidates:
+        bare = needle.removeprefix("evt_")
+        candidates = [e for e in events if e.id.removeprefix("evt_").startswith(bare)]
+    if not candidates:
+        raise ValueError(
+            f"No event matches '{ref}'. Use `pjm search <text>` to find the "
+            f"event id (shown as evt_...)."
+        )
+    if len(candidates) > 1:
+        raise ValueError(
+            f"Event reference '{ref}' is ambiguous ({len(candidates)} matches) — "
+            f"use more characters of the id."
+        )
+    return candidates[0]
