@@ -102,7 +102,7 @@ That's it. `pjm init` installs three git hooks (pre-commit warnings, post-commit
 | Cross-project memory | ✅ library-scoped | 🟡 | 🟡 | 🟡 | 🟡 |
 | Provable ROI score | ✅ A+ → F + $ | ❌ | ❌ | ❌ | ❌ |
 | Plain-text, greppable store | ✅ events.jsonl | ❌ | ❌ | ❌ | 🟡 |
-| No daemon, no ports | ✅ stdio + files | ❌ | ❌ | 🟡 | ❌ server + DB |
+| No server / DB to run | ✅ stdio + files | ❌ | ❌ | ❌ | ❌ server + DB |
 | No telemetry, no accounts | ✅ | ❌ default-on | ✅ | ❌ | 🟡 |
 | Native MCP server | ✅ 14 focused tools | ✅ | 🟡 53 tools | 🟡 | 🟡 |
 | Price | ✅ Free · MIT | Free + paid tier | Free | Freemium | Free + cloud |
