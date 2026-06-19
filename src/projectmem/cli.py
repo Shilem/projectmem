@@ -106,10 +106,19 @@ def attempt(
 @app.command()
 def fix(
     text: str,
-    at: str | None = typer.Option(None, "--at", help="Location (e.g. file:line, class.method)"),
+    at: str | None = typer.Option(
+        None,
+        "--at",
+        help="Location (e.g. file:line, class.method)",
+    ),
+    issue: str | None = typer.Option(
+        None,
+        "--issue",
+        help="Close a specific issue ID instead of the active issue (e.g. 0042).",
+    ),
 ) -> None:
-    """Record a fix and close the current issue."""
-    fix_command.run(text, location=at)
+    """Record a fix and close the active issue, or a specific issue with --issue."""
+    fix_command.run(text, location=at, issue=issue)
 
 
 @app.command()
