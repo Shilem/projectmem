@@ -34,6 +34,92 @@ def test_log_attempt_and_fix_write_events(tmp_path, monkeypatch):
     assert events[1]["outcome"] == "failed"
 
 
+def test_fix_issue_closes_target_without_clearing_newer_active_issue(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    runner.invoke(app, ["log", "old issue"], catch_exceptions=False)
+    runner.invoke(app, ["log", "new issue"], catch_exceptions=False)
+
+    result = runner.invoke(
+        app,
+        ["fix", "fixed old issue", "--issue", "1"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert "Fixed issue #0001" in result.stdout
+    assert (
+        tmp_path / ".projectmem" / ".current_issue"
+    ).read_text(encoding="utf-8") == "0002"
+
+    events = [
+        json.loads(line)
+        for line in (tmp_path / ".projectmem" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert events[-1]["type"] == "fix"
+    assert events[-1]["issue_id"] == "0001"
+
+
+def test_plain_fix_still_closes_active_issue(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    runner.invoke(app, ["log", "active issue"], catch_exceptions=False)
+
+    result = runner.invoke(app, ["fix", "fixed active"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert "Fixed issue #0001" in result.stdout
+    assert not (tmp_path / ".projectmem" / ".current_issue").exists()
+
+
+def test_fix_issue_rejects_unknown_issue(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    runner.invoke(app, ["log", "known issue"], catch_exceptions=False)
+
+    result = runner.invoke(app, ["fix", "missing issue", "--issue", "42"])
+
+    assert result.exit_code == 1
+    assert result.exception is not None
+    assert "Issue #0042 was not found" in str(result.exception)
+
+
+def test_mcp_record_fix_accepts_target_issue_id(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    runner.invoke(app, ["log", "old issue"], catch_exceptions=False)
+    runner.invoke(app, ["log", "new issue"], catch_exceptions=False)
+
+    from projectmem.mcp_server import record_fix
+
+    result = record_fix("fixed old issue through MCP", issue_id="1")
+
+    assert result == "Fixed issue #0001: fixed old issue through MCP"
+    assert (
+        tmp_path / ".projectmem" / ".current_issue"
+    ).read_text(encoding="utf-8") == "0002"
+
+    last = json.loads(
+        (tmp_path / ".projectmem" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()[-1]
+    )
+    assert last["type"] == "fix"
+    assert last["issue_id"] == "0001"
+
+
 def test_attempt_without_open_issue_fails(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()

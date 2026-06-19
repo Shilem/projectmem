@@ -154,7 +154,7 @@ mcp = FastMCP(
         "directly via filesystem write:\n"
         "  - On a bug discovery → log_issue(summary, location).\n"
         "  - After each fix attempt → record_attempt(summary, outcome).\n"
-        "  - After confirmation → record_fix(summary).\n"
+        "  - After confirmation → use record_fix(summary) for the active issue. If fixing a specific older issue, use record_fix(summary, issue_id=\"<issue_id>\") and replace <issue_id> with the actual Projectmem issue ID.\n"
         "  - On a design choice → add_decision(summary).\n"
         "  - On a gotcha / setup detail → add_note(summary).\n"
         "Editing .projectmem/summary.md or .projectmem/PROJECT_MAP.md\n"
@@ -509,26 +509,43 @@ def record_attempt(
 @mcp.tool()
 @safe_tool
 def record_fix(
-    summary: Annotated[str, Field(
-        description="One-line description of the confirmed fix (e.g., "
-                    "'guarded submit handler with isSubmitting ref')."
-    )],
-    location: Annotated[Optional[str], Field(
-        description="Optional file path or component where the fix was "
-                    "applied."
-    )] = None,
+    summary: Annotated[
+        str,
+        Field(
+            description=(
+                "One-line description of the confirmed fix "
+                "(e.g., 'guarded submit handler with isSubmitting ref')."
+            )
+        ),
+    ],
+    location: Annotated[
+        Optional[str],
+        Field(
+            description="Optional file path or component where the fix was applied."
+        ),
+    ] = None,
+    issue_id: Annotated[
+        Optional[str],
+        Field(
+            description=(
+                "Optional zero-padded issue ID (e.g., '0042') to close. "
+                "When omitted, closes the active issue. Numeric strings without "
+                "padding are accepted."
+            )
+        ),
+    ] = None,
 ) -> str:
-    """Record a confirmed fix and close the current issue.
+    """Record a confirmed fix and close an issue.
 
-    Only call AFTER you have evidence the fix works (test passes, error
-    gone, user confirmed). Closing the issue clears the active-issue
-    marker so the next record_attempt won't silently latch onto this
-    closed issue (L-027a).
+    Only call AFTER you have evidence the fix works: test passes, error is gone,
+    or the user confirmed.
 
-    Side effects: appends a `fix` event, closes the active issue, and
-    clears the active-issue marker so the next record_attempt won't
-    silently latch onto a closed issue."""
-    event = fix.run(summary, location=location)
+    If `issue_id` is provided, the fix is attached to that specific issue.
+    If `issue_id` is omitted, the active issue is closed.
+
+    Side effects: appends a `fix` event and updates summary.md. The active-issue
+    marker is cleared only when the active issue is the issue being fixed."""
+    event = fix.run(summary, location=location, issue=issue_id)
     return f"Fixed issue #{event.issue_id}: {summary}"
 
 
