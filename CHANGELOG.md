@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.5
+
+**A reliability release: same features, fewer ways to break.** Three community fixes (thanks @hanley-development) make projectmem safer to run everywhere — you can now close a *specific* issue by ID, MCP git calls can't hang a stdio session, and `pjm brief` / `pjm precheck` no longer crash on non-UTF-8 Windows consoles. No new dependencies, no schema changes.
+
+### Fixed: `pjm fix --issue` / `record_fix(issue_id=…)` — close the issue you mean
+
+`pjm fix` and the MCP `record_fix` previously closed whatever issue was "current," so fixing an older issue after a newer one was logged could silently close the wrong one and write that wrong link into the append-only log. You can now target a specific issue: `pjm fix --issue 0001 "…"` (IDs normalize: `1`/`001`/`0001`), and the active-issue marker is cleared only when it matches. Plain `pjm fix` is unchanged. Closes #3.
+
+### Fixed: MCP git helpers no longer hang stdio sessions
+
+Some MCP tool paths spawned git subprocesses that inherited the server's stdin — which, in a stdio MCP session, is the JSON-RPC transport itself, so a child could block the whole server (notably on Windows). Git calls now run with detached stdin (`DEVNULL`) and bounded timeouts. CLI behavior is unchanged; adds stdio regression tests.
+
+### Fixed: console output is encoding-safe
+
+`pjm brief` and `pjm precheck` print emoji and box-drawing characters that crash on Windows cp1252 consoles and git hooks (`UnicodeEncodeError`). Output is now sanitized to the active console encoding (UTF-8 unchanged; limited consoles degrade gracefully), and separators/markers fall back to ASCII. Decorative output can no longer abort a command or a hook.
+
 ## 0.1.4
 
 **The accountable-judgment release: memory that flags its own staleness instead of silently trusting (or deleting) it — plus a dashboard that opens on an all-at-a-glance Overview.** Six small features (~150 lines, no new dependencies, no schema breaks) sharpen what makes projectmem different: it never deletes a memory, it tells you when one may have gone stale, it lets you retire decisions without losing history, it lists what already failed before you try it again, it briefs you at session start, it snoozes politely when it's wrong, and it exports its judgment to CLAUDE.md for agents that don't speak MCP. Also bumps the version (the `__init__.py` / `pyproject.toml` mismatch is corrected to a single `0.1.4`).
