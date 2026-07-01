@@ -14,6 +14,11 @@ from projectmem.commands.stats import calculate_savings
 from projectmem.commands.score import calculate_score
 
 
+DENSE_FILE_EVENT_THRESHOLD = 10
+FAILURE_IMPORTANCE_WEIGHT = 3
+ROOT_DIRECTORY_BUCKET = "./"
+
+
 def run(
     root: Path | None = None,
     output: Path | None = None,
@@ -23,7 +28,8 @@ def run(
     mem_dir = require_mem_dir(root)
 
     # 1. Build the graph data
-    graph_data = build_graph_data(events)
+    project_root = mem_dir.parent
+    graph_data = build_graph_data(events, root=project_root)
 
     # 2. Read PROJECT_MAP.md for the Project Map tab
     map_path = project_map_path(root)
@@ -65,6 +71,77 @@ def run(
     typer.echo(f"Visualization generated at {viz_path}")
     if open_browser:
         webbrowser.open(viz_path.as_uri())
+
+def _location_path_for_graph(
+    location: str | None,
+    root: Path | None = None,
+) -> str | None:
+    """Return a project-relative path for Story Map linking, if path-like."""
+    if not location:
+        return None
+
+    raw = location.strip().strip('"').strip("'")
+    if not raw:
+        return None
+
+    if ":" in raw:
+        head, tail = raw.split(":", 1)
+        if tail.strip().split(":", 1)[0].isdigit():
+            raw = head
+
+    normalized = raw.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.strip("/")
+
+    if not normalized:
+        return None
+
+    root_path = root or Path.cwd()
+    candidate = root_path / normalized
+    if candidate.is_file():
+        return normalized
+    if candidate.is_dir():
+        return normalized.rstrip("/") + "/"
+
+    name = Path(normalized).name
+    is_file_like = "." in name and " " not in normalized
+    has_path_separator = "/" in normalized
+    if is_file_like and has_path_separator:
+        return normalized
+
+    return None
+
+
+def _file_path_for_graph(path: str) -> str | None:
+    normalized = path.replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.strip("/")
+    return normalized or None
+
+
+def _file_graph_metadata(
+    path: str,
+    event_count: int = 0,
+    failure_count: int = 0,
+) -> dict[str, Any]:
+    normalized = path.replace("\\", "/").strip("/")
+    parts = [part for part in normalized.split("/") if part]
+    directory_parts = parts[:-1]
+    top_directory = f"{directory_parts[0]}/" if directory_parts else ROOT_DIRECTORY_BUCKET
+    importance = event_count + failure_count * FAILURE_IMPORTANCE_WEIGHT
+    return {
+        "path": normalized,
+        "directory_parts": directory_parts,
+        "top_directory": top_directory,
+        "event_count": event_count,
+        "failure_count": failure_count,
+        "failures": failure_count,
+        "importance": importance,
+        "dense_event_threshold": DENSE_FILE_EVENT_THRESHOLD,
+        "is_dense": event_count >= DENSE_FILE_EVENT_THRESHOLD,
+    }
 
 
 def build_project_map_graph(map_text: str) -> dict[str, Any]:
@@ -144,15 +221,19 @@ def build_timeline_data(events: list[Event]) -> list[dict[str, Any]]:
     return timeline
 
 
-def build_graph_data(events: list[Event]) -> dict[str, Any]:
+def build_graph_data(
+    events: list[Event],
+    root: Path | None = None,
+) -> dict[str, Any]:
     nodes = []
     links = []
 
     # Track nodes to avoid duplicates
     node_ids = set()
 
-    # Failure counts for heatmap
-    failure_counts = {}
+    # Counts for heatmap, labels, and collapse decisions
+    event_counts: dict[str, int] = {}
+    failure_counts: dict[str, int] = {}
 
     # Helper to add file nodes
     def add_file(path: str):
@@ -163,23 +244,38 @@ def build_graph_data(events: list[Event]) -> dict[str, Any]:
                 "type": "file",
                 "label": path.split("/")[-1],
                 "full_path": path,
-                "failures": 0
+                **_file_graph_metadata(path),
             })
 
-    # First pass: Collect all files and calculate failures
+    # First pass: Collect all files and calculate counts
     for event in events:
-        for f in event.files:
-            add_file(f)
-        if event.location and ":" in event.location:
-            f = event.location.split(":")[0]
-            add_file(f)
-            if event.outcome == "failed":
-                failure_counts[f] = failure_counts.get(f, 0) + 1
+        explicit_files = [
+            normalized_file
+            for file_path in event.files
+            if (normalized_file := _file_path_for_graph(file_path))
+        ]
+        linked_files = list(dict.fromkeys(explicit_files))
+        location_file = _location_path_for_graph(event.location, root=root)
+        if location_file and location_file not in linked_files:
+            linked_files.append(location_file)
 
-    # Update failure counts in nodes
+        for file_path in linked_files:
+            add_file(file_path)
+            event_counts[file_path] = event_counts.get(file_path, 0) + 1
+            if event.outcome == "failed":
+                failure_counts[file_path] = failure_counts.get(file_path, 0) + 1
+
+    # Update file metadata in nodes
     for node in nodes:
-        if node["id"] in failure_counts:
-            node["failures"] = failure_counts[node["id"]]
+        if node["type"] != "file":
+            continue
+        node.update(
+            _file_graph_metadata(
+                node["id"],
+                event_count=event_counts.get(node["id"], 0),
+                failure_count=failure_counts.get(node["id"], 0),
+            )
+        )
 
     # Second pass: Collect events and links
     for i, event in enumerate(events):
@@ -201,14 +297,21 @@ def build_graph_data(events: list[Event]) -> dict[str, Any]:
             node_data["capture_source"] = event.capture_source
         nodes.append(node_data)
 
-        # Link event to its files
-        for f in event.files:
-            links.append({"source": event_id, "target": f, "type": "mention"})
+        explicit_files = [
+            normalized_file
+            for file_path in event.files
+            if (normalized_file := _file_path_for_graph(file_path))
+        ]
+        linked_files = list(dict.fromkeys(explicit_files))
 
-        # Link event to its location file
-        if event.location and ":" in event.location:
-            f = event.location.split(":")[0]
-            links.append({"source": event_id, "target": f, "type": "at"})
+        # Link event to its explicit files
+        for file_path in linked_files:
+            links.append({"source": event_id, "target": file_path, "type": "mention"})
+
+        # Link event to its location file when explicit files do not already do so
+        location_file = _location_path_for_graph(event.location, root=root)
+        if location_file and location_file not in linked_files:
+            links.append({"source": event_id, "target": location_file, "type": "at"})
 
     # 3. Calculate ROI stats
     raw_events = [e.__dict__ for e in events]
@@ -412,6 +515,54 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
         .story-link { stroke-opacity:0.35; stroke-width:1px; }
         .story-node { cursor:pointer; transition: filter 0.2s; }
         .story-node:hover { filter: brightness(1.3); }
+        .story-controls {
+            position:absolute; top:16px; left:16px; z-index:6;
+            display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+            max-width:calc(100% - 260px);
+        }
+        .story-control-btn {
+            border:1px solid var(--border);
+            background:rgba(255,255,255,0.94);
+            color:var(--text-dim);
+            border-radius:8px;
+            padding:7px 10px;
+            font-size:11px;
+            font-weight:700;
+            cursor:pointer;
+            box-shadow:0 4px 14px rgba(11,42,74,0.08);
+        }
+        .story-control-btn:hover { color:var(--text); border-color:var(--border-light); }
+        .story-control-btn.active {
+            background:var(--primary-glow);
+            color:var(--primary);
+            border-color:rgba(31,111,235,0.32);
+        }
+        .story-label {
+            pointer-events:none;
+            font-size:10px;
+            fill:#475569;
+            paint-order:stroke;
+            stroke:rgba(255,255,255,0.9);
+            stroke-width:3px;
+            stroke-linejoin:round;
+        }
+        .story-node.dimmed,
+        .story-link.dimmed,
+        .story-label.dimmed,
+        .story-bubble-label.dimmed { opacity:0.14; }
+        .story-node.focused,
+        .story-link.focused,
+        .story-label.focused,
+        .story-bubble-label.focused { opacity:1; }
+        .story-bubble-label {
+            pointer-events:none;
+            font-size:11px;
+            font-weight:700;
+            fill:#1e3a5f;
+            paint-order:stroke;
+            stroke:rgba(255,255,255,0.94);
+            stroke-width:4px;
+        }
 
         /* ═══ ROI Dashboard ═══ */
         .roi-scroll { overflow-y:auto; height:100%; padding:28px 24px; }
@@ -809,6 +960,12 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
 
         <!-- Story Map -->
         <div class="panel" id="panel-story">
+            <div class="story-controls">
+                <button class="story-control-btn" id="story-file-collapse">Collapse dense files</button>
+                <button class="story-control-btn" id="story-directory-collapse">Collapse directories</button>
+                <button class="story-control-btn" id="story-expand-all">Expand all</button>
+                <button class="story-control-btn" id="story-reset-focus">Reset focus</button>
+            </div>
             <svg id="canvas"></svg>
             <div class="map-legend">
                 <div class="map-legend-item"><div class="dot" style="background:var(--primary)"></div> Issue / Event</div>
@@ -816,7 +973,9 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
                 <div class="map-legend-item"><div class="dot" style="background:var(--error)"></div> Failed Attempt</div>
                 <div class="map-legend-item"><div class="dot" style="background:var(--warning)"></div> File (warm = more failures)</div>
                 <div class="map-legend-item"><div class="dot" style="background:var(--accent)"></div> Decision</div>
-                <div class="map-legend-item" style="margin-top:4px;font-size:10px;color:var(--text-muted)">Scroll to zoom &middot; Drag to pan</div>
+                <div class="map-legend-item"><div class="dot" style="background:#dbeafe;border:2px solid #2563eb"></div> Collapsed file</div>
+                <div class="map-legend-item"><div class="dot" style="background:#ecfeff;border:2px solid #0891b2"></div> Directory bubble</div>
+                <div class="map-legend-item" style="margin-top:4px;font-size:10px;color:var(--text-muted)">Scroll to zoom &middot; Drag to pan &middot; Click files to focus</div>
             </div>
             <div class="map-tooltip" id="tooltip"></div>
         </div>
@@ -1058,110 +1217,456 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
     })();
 
     // ══════════════════════════════════════════
-    // TAB 1: Story Map — Filter noise, add glow
+    // TAB 1: Story Map — View-state graph
     // ══════════════════════════════════════════
-    const NOISE = /__pycache__|\\.pyc$|\\.DS_Store|\\.egg-info/;
-    const cleanNodes = data.nodes.filter(n => !NOISE.test(n.id));
-    const cleanNodeIds = new Set(cleanNodes.map(n => n.id));
-    const cleanLinks = data.links.filter(l => {
-        const s = typeof l.source === 'object' ? l.source.id : l.source;
-        const t = typeof l.target === 'object' ? l.target.id : l.target;
-        return cleanNodeIds.has(s) && cleanNodeIds.has(t);
-    });
+    (function renderStoryMap() {
+        const NOISE = /__pycache__|\\.pyc$|\\.DS_Store|\\.egg-info/;
+        const DENSE_FILE_EVENT_THRESHOLD = 10;
+        const ROOT_DIRECTORY_BUCKET = './';
 
-    const svg = d3.select("#canvas");
-    const width = window.innerWidth;
-    const height = window.innerHeight - 94;
-    const g = svg.append("g");
-
-    // Glow filter
-    const defs = svg.append("defs");
-    const glow = defs.append("filter").attr("id","glow");
-    glow.append("feGaussianBlur").attr("stdDeviation","3").attr("result","blur");
-    glow.append("feMerge").selectAll("feMergeNode")
-        .data(["blur","SourceGraphic"]).enter()
-        .append("feMergeNode").attr("in", d=>d);
-
-    svg.call(d3.zoom().scaleExtent([0.3,5]).on("zoom", e => g.attr("transform", e.transform)));
-
-    const sim = d3.forceSimulation(cleanNodes)
-        .force("link", d3.forceLink(cleanLinks).id(d=>d.id).distance(d => {
-            const s = typeof d.source === 'object' ? d.source : cleanNodes.find(n=>n.id===d.source);
-            return (s && s.type === 'event') ? 60 : 90;
-        }))
-        .force("charge", d3.forceManyBody().strength(-250))
-        .force("center", d3.forceCenter(width/2, height/2))
-        .force("collision", d3.forceCollide(12));
-
-    const link = g.append("g").selectAll("line")
-        .data(cleanLinks).enter().append("line")
-        .attr("class","story-link")
-        .attr("stroke", d => {
-            const s = typeof d.source === 'object' ? d.source : cleanNodes.find(n=>n.id===d.source);
-            if (!s) return '#334155';
-            if (s.outcome === 'failed') return '#ef444480';
-            if (s.event_type === 'fix') return '#10b98160';
-            return '#33415580';
+        const canonicalNodes = data.nodes.filter(n => !NOISE.test(n.id));
+        const canonicalNodeIds = new Set(canonicalNodes.map(n => n.id));
+        const canonicalLinks = data.links.filter(l => {
+            const s = typeof l.source === 'object' ? l.source.id : l.source;
+            const t = typeof l.target === 'object' ? l.target.id : l.target;
+            return canonicalNodeIds.has(s) && canonicalNodeIds.has(t);
         });
 
-    function nodeColor(d) {
-        if (d.type === 'file') {
-            const heat = Math.min((d.failures||0)/5, 1);
-            return d3.interpolate("#475569","#f87171")(heat);
+        const state = {
+            fileCollapse: false,
+            directoryCollapse: false,
+            expandedDirectories: new Set(),
+            expandedFiles: new Set(),
+            focusedFileId: null,
+            selectedNodeId: null,
+            previousFileCollapse: false,
+        };
+
+        const byId = new Map(canonicalNodes.map(n => [n.id, n]));
+        const linksByFile = new Map();
+        canonicalLinks.forEach(link => {
+            const s = sourceId(link);
+            const t = targetId(link);
+            const target = byId.get(t);
+            if (target && target.type === 'file') {
+                if (!linksByFile.has(t)) linksByFile.set(t, []);
+                linksByFile.get(t).push({ ...link, source: s, target: t });
+            }
+        });
+
+        const svg = d3.select("#canvas");
+        const width = window.innerWidth;
+        const height = window.innerHeight - 94;
+        const g = svg.append("g");
+        let sim = null;
+
+        const defs = svg.append("defs");
+        const glow = defs.append("filter").attr("id","glow");
+        glow.append("feGaussianBlur").attr("stdDeviation","3").attr("result","blur");
+        glow.append("feMerge").selectAll("feMergeNode")
+            .data(["blur","SourceGraphic"]).enter()
+            .append("feMergeNode").attr("in", d=>d);
+
+        svg.call(d3.zoom().scaleExtent([0.3,5]).on("zoom", e => g.attr("transform", e.transform)));
+
+        function sourceId(link) { return typeof link.source === 'object' ? link.source.id : link.source; }
+        function targetId(link) { return typeof link.target === 'object' ? link.target.id : link.target; }
+        function isDenseFile(node) { return node.type === 'file' && (node.event_count || 0) >= DENSE_FILE_EVENT_THRESHOLD; }
+        function fileLabel(node) { return node.label || (node.id || '').split('/').pop(); }
+
+        function fullGraph() {
+            return {
+                nodes: canonicalNodes.map(n => ({ ...n })),
+                links: canonicalLinks.map(l => ({ ...l, source: sourceId(l), target: targetId(l) })),
+            };
         }
-        if (d.event_type==='fix') return '#10b981';
-        if (d.outcome==='failed') return '#ef4444';
-        if (d.event_type==='decision') return '#818cf8';
-        return '#3b82f6';
-    }
-    function nodeRadius(d) {
-        if (d.type==='event') {
-            if (d.event_type==='fix' || d.outcome==='failed') return 8;
-            return 6;
+
+        function makeFileBubble(fileNode) {
+            return {
+                ...fileNode,
+                id: 'file-bubble:' + fileNode.id,
+                file_id: fileNode.id,
+                type: 'file',
+                synthetic_type: 'file_bubble',
+                label: fileLabel(fileNode),
+                display_label: fileLabel(fileNode) + ' · ' + (fileNode.event_count || 0) + ' events',
+                event_count: fileNode.event_count || 0,
+                failure_count: fileNode.failure_count || fileNode.failures || 0,
+                importance: fileNode.importance || 0,
+            };
         }
-        return 5 + Math.min((d.failures||0), 4);
-    }
 
-    const node = g.append("g").selectAll("circle")
-        .data(cleanNodes).enter().append("circle")
-        .attr("class","story-node")
-        .attr("r", nodeRadius)
-        .attr("fill", d => d.auto_captured ? nodeColor(d)+'99' : nodeColor(d))
-        .attr("stroke", d => d.type==='event' ? nodeColor(d) : '#0f172a')
-        .attr("stroke-width", d => d.type==='event' ? 2 : 1)
-        .attr("stroke-opacity", d => d.type==='event' ? 0.3 : 1)
-        .attr("stroke-dasharray", d => d.auto_captured ? "3,2" : null)
-        .attr("filter", d => (d.type==='event' && (d.event_type==='fix' || d.outcome==='failed')) ? "url(#glow)" : null)
-        .call(d3.drag()
-            .on("start", e => { if(!e.active) sim.alphaTarget(0.3).restart(); e.subject.fx=e.subject.x; e.subject.fy=e.subject.y; })
-            .on("drag", e => { e.subject.fx=e.x; e.subject.fy=e.y; })
-            .on("end", e => { if(!e.active) sim.alphaTarget(0); e.subject.fx=null; e.subject.fy=null; }));
+        function directoryPathForParts(parts) {
+            if (!parts || !parts.length) return ROOT_DIRECTORY_BUCKET;
+            return parts.join('/') + '/';
+        }
 
-    const labels = g.append("g").selectAll("text")
-        .data(cleanNodes.filter(d => d.type==='event' || (d.failures||0)>0))
-        .enter().append("text")
-        .attr("font-size","10px")
-        .attr("fill", d => d.type==='event' ? '#5A6B82' : '#475569')
-        .attr("dx",12).attr("dy",".35em")
-        .text(d => d.label);
+        function childDirectoryPath(fileNode) {
+            const parts = fileNode.directory_parts || [];
+            for (let depth = parts.length; depth >= 0; depth--) {
+                const parent = directoryPathForParts(parts.slice(0, depth));
+                if (state.expandedDirectories.has(parent)) {
+                    if (depth >= parts.length) return fileNode.id;
+                    return directoryPathForParts(parts.slice(0, depth + 1));
+                }
+            }
+            return fileNode.top_directory || ROOT_DIRECTORY_BUCKET;
+        }
 
-    node.on("mouseover", (event,d) => {
-        const tt = document.getElementById("tooltip");
-        tt.style.opacity=1;
-        const typeLabel = d.event_type ? d.event_type.toUpperCase() : (d.type||'').toUpperCase();
-        const details = d.summary || d.full_path || '';
-        const outcome = d.outcome ? '<br/><span style="color:'+(d.outcome==='failed'?'var(--error)':'var(--success)')+'">Outcome: '+d.outcome+'</span>' : '';
-        const loc = d.location ? '<br/><span style="color:var(--accent)">@ '+d.location+'</span>' : '';
-        tt.innerHTML = '<strong>'+typeLabel+': '+d.label+'</strong><br/>'+details+outcome+loc;
-        tt.style.left=(event.pageX+14)+"px";
-        tt.style.top=(event.pageY-14)+"px";
-    }).on("mouseout", () => { document.getElementById("tooltip").style.opacity=0; });
+        function makeDirectoryBubble(directoryPath, children) {
+            const eventCount = children.reduce((sum, child) => sum + (child.event_count || 0), 0);
+            const failureCount = children.reduce((sum, child) => sum + (child.failure_count || child.failures || 0), 0);
+            return {
+                id: 'dir-bubble:' + directoryPath,
+                type: 'directory',
+                synthetic_type: 'directory_bubble',
+                directory_path: directoryPath,
+                label: directoryPath,
+                display_label: directoryPath + ' · ' + eventCount + ' events',
+                event_count: eventCount,
+                failure_count: failureCount,
+                importance: eventCount + failureCount * 3,
+            };
+        }
 
-    sim.on("tick", () => {
-        link.attr("x1",d=>d.source.x).attr("y1",d=>d.source.y).attr("x2",d=>d.target.x).attr("y2",d=>d.target.y);
-        node.attr("cx",d=>d.x).attr("cy",d=>d.y);
-        labels.attr("x",d=>d.x).attr("y",d=>d.y);
-    });
+        function deriveVisibleGraph() {
+            if (state.directoryCollapse) return deriveDirectoryGraph();
+            if (state.fileCollapse) return deriveFileCollapsedGraph();
+            return fullGraph();
+        }
+
+        function deriveFileCollapsedGraph() {
+            const visibleNodes = [];
+            const visibleLinks = [];
+            const hiddenEventIds = new Set();
+            const replacementByFile = new Map();
+            const linksByEvent = new Map();
+
+            canonicalNodes.forEach(node => {
+                if (node.type === 'file' && isDenseFile(node) && !state.expandedFiles.has(node.id)) {
+                    const bubble = makeFileBubble(node);
+                    visibleNodes.push(bubble);
+                    replacementByFile.set(node.id, bubble.id);
+                    return;
+                }
+                visibleNodes.push({ ...node });
+            });
+
+            canonicalLinks.forEach(link => {
+                const s = sourceId(link);
+                const t = targetId(link);
+                const normalized = { ...link, source: s, target: t };
+                if (!linksByEvent.has(s)) linksByEvent.set(s, []);
+                linksByEvent.get(s).push(normalized);
+            });
+
+            linksByEvent.forEach((eventLinks, eventId) => {
+                const fileLinks = eventLinks.filter(link => {
+                    const target = byId.get(link.target);
+                    return target && target.type === 'file';
+                });
+                if (fileLinks.length && fileLinks.every(link => replacementByFile.has(link.target))) {
+                    hiddenEventIds.add(eventId);
+                }
+            });
+
+            const emittedPairs = new Set();
+            canonicalLinks.forEach(link => {
+                const s = sourceId(link);
+                const t = targetId(link);
+                if (hiddenEventIds.has(s)) return;
+                const rewrittenTarget = replacementByFile.get(t) || t;
+                const pairKey = s + '\u0000' + rewrittenTarget;
+                if (emittedPairs.has(pairKey)) return;
+                emittedPairs.add(pairKey);
+                visibleLinks.push({
+                    ...link,
+                    source: s,
+                    target: rewrittenTarget,
+                });
+            });
+
+            return {
+                nodes: visibleNodes.filter(node => !(node.type === 'event' && hiddenEventIds.has(node.id))),
+                links: visibleLinks,
+            };
+        }
+
+        function deriveDirectoryGraph() {
+            const fileNodes = canonicalNodes.filter(n => n.type === 'file');
+            const eventNodesById = new Map(canonicalNodes.filter(n => n.type === 'event').map(n => [n.id, n]));
+            const groupChildren = new Map();
+            const filePassthrough = new Set();
+
+            fileNodes.forEach(fileNode => {
+                const childPath = childDirectoryPath(fileNode);
+                if (childPath === fileNode.id) {
+                    filePassthrough.add(fileNode.id);
+                    return;
+                }
+                if (!groupChildren.has(childPath)) groupChildren.set(childPath, []);
+                groupChildren.get(childPath).push(fileNode);
+            });
+
+            const directoryNodes = [...groupChildren.entries()].map(([directoryPath, children]) =>
+                makeDirectoryBubble(directoryPath, children)
+            );
+            const replacementByFile = new Map();
+            groupChildren.forEach((children, directoryPath) => {
+                children.forEach(fileNode => replacementByFile.set(fileNode.id, 'dir-bubble:' + directoryPath));
+            });
+
+            const linksByEvent = new Map();
+            canonicalLinks.forEach(link => {
+                const s = sourceId(link);
+                const t = targetId(link);
+                const target = byId.get(t);
+                if (!target || target.type !== 'file') return;
+                if (!linksByEvent.has(s)) linksByEvent.set(s, []);
+                linksByEvent.get(s).push({ ...link, source: s, target: t });
+            });
+
+            const visibleEventIds = new Set();
+            const visibleLinks = [];
+            const emittedPairs = new Set();
+
+            linksByEvent.forEach((eventLinks, eventId) => {
+                const visibleTargets = [...new Set(eventLinks.map(link => replacementByFile.get(link.target) || link.target))];
+                if (visibleTargets.length <= 1 && visibleTargets[0] && visibleTargets[0].startsWith('dir-bubble:')) {
+                    return;
+                }
+                if (visibleTargets.length === 0) return;
+                visibleEventIds.add(eventId);
+                visibleTargets.forEach(target => {
+                    const pairKey = eventId + '\u0000' + target;
+                    if (emittedPairs.has(pairKey)) return;
+                    emittedPairs.add(pairKey);
+                    visibleLinks.push({ source: eventId, target: target });
+                });
+            });
+
+            const visibleNodes = [
+                ...directoryNodes,
+                ...fileNodes.filter(n => filePassthrough.has(n.id)).map(n => ({ ...n })),
+                ...[...visibleEventIds]
+                    .map(id => eventNodesById.get(id))
+                    .filter(Boolean)
+                    .map(n => ({ ...n })),
+            ];
+
+            return { nodes: visibleNodes, links: visibleLinks };
+        }
+
+        function restart() {
+            const visible = deriveVisibleGraph();
+            drawVisibleGraph(visible.nodes, visible.links);
+            updateButtons();
+        }
+
+        function updateButtons() {
+            document.getElementById('story-file-collapse').classList.toggle('active', state.fileCollapse);
+            document.getElementById('story-directory-collapse').classList.toggle('active', state.directoryCollapse);
+        }
+
+        document.getElementById('story-file-collapse').addEventListener('click', () => {
+            if (state.directoryCollapse) return;
+            state.fileCollapse = !state.fileCollapse;
+            restart();
+        });
+        document.getElementById('story-directory-collapse').addEventListener('click', () => {
+            if (!state.directoryCollapse) {
+                state.previousFileCollapse = state.fileCollapse;
+                state.directoryCollapse = true;
+                state.fileCollapse = false;
+            } else {
+                state.directoryCollapse = false;
+                state.fileCollapse = state.previousFileCollapse;
+                state.expandedDirectories.clear();
+            }
+            restart();
+        });
+        document.getElementById('story-expand-all').addEventListener('click', () => {
+            state.fileCollapse = false;
+            state.directoryCollapse = false;
+            state.expandedDirectories.clear();
+            state.expandedFiles.clear();
+            state.focusedFileId = null;
+            state.selectedNodeId = null;
+            restart();
+        });
+        document.getElementById('story-reset-focus').addEventListener('click', () => {
+            state.focusedFileId = null;
+            state.selectedNodeId = null;
+            restart();
+        });
+
+        function nodeFill(d) {
+            if (d.synthetic_type === 'directory_bubble') return '#ecfeff';
+            if (d.synthetic_type === 'file_bubble') return '#dbeafe';
+            if (d.type === 'file') {
+                const heat = Math.min((d.failure_count || d.failures || 0) / 5, 1);
+                return d3.interpolate("#334155","#f87171")(heat);
+            }
+            if (d.event_type === 'fix') return '#10b981';
+            if (d.outcome === 'failed') return '#ef4444';
+            if (d.event_type === 'decision') return '#818cf8';
+            if (d.event_type === 'note') return '#64748b';
+            return '#3b82f6';
+        }
+
+        function nodeStroke(d) {
+            if (d.synthetic_type === 'directory_bubble') return '#0891b2';
+            if (d.synthetic_type === 'file_bubble') return '#2563eb';
+            return d.type === 'event' ? nodeFill(d) : '#0f172a';
+        }
+
+        function nodeRadius(d) {
+            if (d.synthetic_type === 'directory_bubble') return 18 + Math.min(Math.sqrt(d.event_count || 1) * 3, 28);
+            if (d.synthetic_type === 'file_bubble') return 15 + Math.min(Math.sqrt(d.event_count || 1) * 2.5, 22);
+            if (d.type === 'event') {
+                if (d.auto_captured) return 4.5;
+                if (d.event_type === 'fix' || d.outcome === 'failed') return 8;
+                return 6;
+            }
+            return 7 + Math.min((d.failure_count || d.failures || 0), 5);
+        }
+
+        function linkColor(d) {
+            const source = byId.get(sourceId(d));
+            if (source && source.outcome === 'failed') return '#ef444480';
+            if (source && source.event_type === 'fix') return '#10b98160';
+            return '#33415580';
+        }
+
+        function linkDistance(d) {
+            const source = byId.get(sourceId(d));
+            const target = byId.get(targetId(d));
+            if ((source && source.synthetic_type) || (target && target.synthetic_type)) return 120;
+            if (source && source.type === 'event') return 86;
+            return 110;
+        }
+
+        function shouldShowLabel(d) {
+            if (d.synthetic_type) return true;
+            if (d.id === state.selectedNodeId || d.id === state.focusedFileId) return true;
+            if (state.focusedFileId && isAttachedToFocusedFile(d)) return true;
+            if (d.type === 'file' && (d.importance || 0) >= 10) return true;
+            if (d.type === 'event' && (d.outcome === 'failed' || d.event_type === 'fix')) return true;
+            return false;
+        }
+
+        function isAttachedToFocusedFile(d) {
+            if (!state.focusedFileId) return false;
+            if (d.id === state.focusedFileId || d.file_id === state.focusedFileId) return true;
+            const focusedLinks = linksByFile.get(state.focusedFileId) || [];
+            return focusedLinks.some(link => sourceId(link) === d.id || targetId(link) === d.id);
+        }
+
+        function focusClassForNode(d) {
+            if (state.directoryCollapse) return "";
+            if (!state.focusedFileId) return "";
+            return isAttachedToFocusedFile(d) ? "focused" : "dimmed";
+        }
+
+        function focusClassForLink(d) {
+            if (state.directoryCollapse) return "";
+            if (!state.focusedFileId) return "";
+            const s = sourceId(d);
+            const t = targetId(d);
+            const focusedBubbleId = 'file-bubble:' + state.focusedFileId;
+            return s === state.focusedFileId || t === state.focusedFileId || s === focusedBubbleId || t === focusedBubbleId ? "focused" : "dimmed";
+        }
+
+        function showStoryTooltip(event, d) {
+            const tt = document.getElementById("tooltip");
+            tt.style.opacity = 1;
+            const typeLabel = d.synthetic_type
+                ? (d.synthetic_type === 'directory_bubble' ? 'DIRECTORY' : 'FILE')
+                : (d.event_type ? d.event_type.toUpperCase() : (d.type || '').toUpperCase());
+            const details = d.summary || d.full_path || d.path || d.id || '';
+            const count = d.event_count ? '<br/><span style="color:var(--primary)">'+d.event_count+' attached events</span>' : '';
+            const failures = d.failure_count ? '<br/><span style="color:var(--error)">'+d.failure_count+' failed attempts</span>' : '';
+            const outcome = d.outcome ? '<br/><span style="color:'+(d.outcome==='failed'?'var(--error)':'var(--success)')+'">Outcome: '+d.outcome+'</span>' : '';
+            const loc = d.location ? '<br/><span style="color:var(--accent)">@ '+d.location+'</span>' : '';
+            tt.innerHTML = '<strong>'+typeLabel+': '+(d.display_label || d.label || d.id)+'</strong><br/>'+details+count+failures+outcome+loc;
+            tt.style.left = (event.pageX + 14) + "px";
+            tt.style.top = (event.pageY - 14) + "px";
+        }
+
+        function handleNodeClick(d) {
+            state.selectedNodeId = d.id;
+            if (d.synthetic_type === 'directory_bubble') {
+                state.expandedDirectories.add(d.directory_path);
+                restart();
+                return;
+            }
+            if (d.synthetic_type === 'file_bubble') {
+                state.expandedFiles.add(d.file_id);
+                state.focusedFileId = d.file_id;
+                restart();
+                return;
+            }
+            if (d.type === 'file') {
+                state.focusedFileId = d.id;
+                restart();
+                return;
+            }
+            restart();
+        }
+
+        function drawVisibleGraph(nodes, links) {
+            if (sim) sim.stop();
+            g.selectAll("*").remove();
+            sim = d3.forceSimulation(nodes)
+                .force("link", d3.forceLink(links).id(d=>d.id).distance(linkDistance))
+                .force("charge", d3.forceManyBody().strength(-250))
+                .force("center", d3.forceCenter(width/2, height/2))
+                .force("collision", d3.forceCollide(d => nodeRadius(d) + 3));
+            drawLayers(nodes, links);
+        }
+
+        function drawLayers(nodes, links) {
+            const link = g.append("g").selectAll("line")
+                .data(links).enter().append("line")
+                .attr("class", d => "story-link " + focusClassForLink(d))
+                .attr("stroke", linkColor);
+
+            const node = g.append("g").selectAll("circle")
+                .data(nodes).enter().append("circle")
+                .attr("class", d => "story-node " + focusClassForNode(d))
+                .attr("r", nodeRadius)
+                .attr("fill", nodeFill)
+                .attr("stroke", nodeStroke)
+                .attr("stroke-width", d => d.synthetic_type ? 2 : (d.type === 'event' ? 2 : 1))
+                .attr("stroke-opacity", d => d.type === 'event' ? 0.3 : 1)
+                .attr("stroke-dasharray", d => d.auto_captured ? "3,2" : null)
+                .attr("filter", d => (d.type === 'event' && (d.event_type === 'fix' || d.outcome === 'failed')) ? "url(#glow)" : null)
+                .call(d3.drag()
+                    .on("start", e => { if(!e.active) sim.alphaTarget(0.3).restart(); e.subject.fx=e.subject.x; e.subject.fy=e.subject.y; })
+                    .on("drag", e => { e.subject.fx=e.x; e.subject.fy=e.y; })
+                    .on("end", e => { if(!e.active) sim.alphaTarget(0); e.subject.fx=null; e.subject.fy=null; }));
+
+            node.on("click", (event, d) => handleNodeClick(d));
+            node.on("mouseover", (event,d) => showStoryTooltip(event, d));
+            node.on("mouseout", () => { document.getElementById("tooltip").style.opacity=0; });
+
+            const labels = g.append("g").selectAll("text")
+                .data(nodes.filter(shouldShowLabel))
+                .enter().append("text")
+                .attr("class", d => (d.synthetic_type ? "story-bubble-label " : "story-label ") + focusClassForNode(d))
+                .attr("dx", d => nodeRadius(d) + 6)
+                .attr("dy",".35em")
+                .text(d => d.display_label || d.label);
+
+            sim.on("tick", () => {
+                link.attr("x1",d=>d.source.x).attr("y1",d=>d.source.y).attr("x2",d=>d.target.x).attr("y2",d=>d.target.y);
+                node.attr("cx",d=>d.x).attr("cy",d=>d.y);
+                labels.attr("x",d=>d.x).attr("y",d=>d.y);
+            });
+        }
+
+        restart();
+    })();
 
     // ══════════════════════════════════════════
     // TAB 2: ROI Dashboard — Full overhaul

@@ -84,6 +84,7 @@ docs/
 PROJECTMEM_PLAN.md
 *PLAN*.md
 *plan*.md
+.worktrees/
 
 # Brand SVG sources only (PNGs and demo SVG stay public)
 brand/logo-mark.svg
