@@ -313,3 +313,16 @@ def test_build_graph_data_still_links_location_with_line(tmp_path: Path) -> None
     graph = build_graph_data([event], root=tmp_path)
 
     assert ("evt_line", "src/projectmem/cli.py", "at") in _link_tuples(graph)
+
+
+def test_template_has_project_map_flow_view() -> None:
+    """The Project Map ships three layouts: Tree, Graph, and Flow (0.1.6)."""
+    from projectmem.commands.visualize import VIZ_TEMPLATE
+
+    assert 'data-view="tree"' in VIZ_TEMPLATE
+    assert 'data-view="graph"' in VIZ_TEMPLATE
+    assert 'data-view="flow"' in VIZ_TEMPLATE
+    assert 'id="map-flow"' in VIZ_TEMPLATE
+    assert "renderMapFlow" in VIZ_TEMPLATE
+    # the flow ends in the append-only memory cylinder
+    assert "events.jsonl" in VIZ_TEMPLATE

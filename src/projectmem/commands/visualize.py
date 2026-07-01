@@ -644,6 +644,15 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
         #map-tree { width:100%; height:100%; display:none; }
         .map-graph-pane.tree-mode #map-canvas { display:none; }
         .map-graph-pane.tree-mode #map-tree { display:block; }
+        #map-flow { position:absolute; inset:0; overflow:hidden; display:none; }
+        .map-graph-pane.flow-mode #map-canvas, .map-graph-pane.flow-mode #map-tree { display:none; }
+        .map-graph-pane.flow-mode #map-flow { display:block; }
+        .map-graph-pane.flow-mode .map-legend { display:none; }
+        .flow-empty { padding:64px 24px; color:var(--text-dim); font-size:13px; }
+        .map-details-toggle { position:absolute; top:14px; right:14px; z-index:5; padding:3px;
+            background:var(--surface); border:1px solid var(--border); border-radius:8px; }
+        .map-split.details-collapsed .map-text-pane { display:none; }
+        .map-split.details-collapsed .map-graph-pane { border-right:none; }
         .map-view-toggle {
             position:absolute; top:14px; left:14px; z-index:5;
             display:flex; gap:0; padding:3px;
@@ -1056,9 +1065,14 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
                     <div class="map-view-toggle">
                         <button class="map-view-btn active" data-view="tree">Tree</button>
                         <button class="map-view-btn" data-view="graph">Graph</button>
+                        <button class="map-view-btn" data-view="flow">Flow</button>
+                    </div>
+                    <div class="map-details-toggle">
+                        <button class="map-view-btn" id="map-details-btn" title="show / hide the PROJECT_MAP.md pane">Hide details</button>
                     </div>
                     <svg id="map-canvas"></svg>
                     <svg id="map-tree"></svg>
+                    <div id="map-flow"></div>
                     <div class="map-legend">
                         <div class="map-legend-item"><div class="dot" style="background:var(--accent)"></div> Folder</div>
                         <div class="map-legend-item"><div class="dot" style="background:var(--primary)"></div> File / Module</div>
@@ -2155,25 +2169,172 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
         }).on("mouseout", () => { document.getElementById("tooltip").style.opacity = 0; });
     }
 
+    // TAB 3c: Project Map — Flow view (layered left-to-right flowchart)
+    // Same real data as the Story Map: structure + what happened, flowing into memory.
+    function renderMapFlow() {
+        const host = d3.select('#map-flow');
+        host.selectAll('*').remove();
+        const fileNodes = data.nodes.filter(n => n.type === 'file');
+        if (!fileNodes.length) {
+            host.append('div').attr('class', 'flow-empty')
+                .text('No file activity yet — log an issue or attempt against a file to see the flow.');
+            return;
+        }
+        // per-file activity chips from the events connected to each file
+        const evById = {};
+        data.nodes.forEach(n => { if (n.type === 'event') evById[n.id] = n; });
+        const chipStats = {};
+        fileNodes.forEach(f => { chipStats[f.id] = { failed: 0, fixed: 0, decisions: 0, notes: 0 }; });
+        data.links.forEach(l => {
+            const s = (l.source && l.source.id) || l.source, t = (l.target && l.target.id) || l.target;
+            const ev = evById[s] || evById[t];
+            const fid = evById[s] ? t : s;
+            if (!ev || !chipStats[fid]) return;
+            if (ev.event_type === 'attempt' && ev.outcome === 'failed') chipStats[fid].failed++;
+            else if (ev.event_type === 'fix') chipStats[fid].fixed++;
+            else if (ev.event_type === 'decision') chipStats[fid].decisions++;
+            else if (ev.event_type === 'note') chipStats[fid].notes++;
+        });
+        // group files by parent directory
+        const dirs = {};
+        fileNodes.forEach(f => {
+            const parts = (f.path || f.id).split('/');
+            const d = parts.length > 1 ? parts.slice(0, -1).join('/') + '/' : '(root)';
+            (dirs[d] = dirs[d] || []).push(f);
+        });
+        const dirNames = Object.keys(dirs).sort();
+        const rowH = 62, dirX = 200, fileX = 400, actX = 620, memX = 830, WIDTH = 1010;
+        const HEIGHT = Math.max(420, fileNodes.length * rowH + 130);
+        const paneW = host.node().clientWidth || 800, paneH = host.node().clientHeight || 600;
+        const outer = host.append('svg').attr('width', paneW).attr('height', paneH)
+            .style('cursor', 'grab');
+        outer.append('defs').append('marker').attr('id', 'flowarr').attr('viewBox', '0 0 10 10')
+            .attr('refX', 9).attr('refY', 5).attr('markerWidth', 7).attr('markerHeight', 7).attr('orient', 'auto')
+            .append('path').attr('d', 'M0,0 L10,5 L0,10 z').attr('fill', '#8FA8C8');
+        const svg = outer.append('g');   // zoom/pan container — draw everything in here
+        const flowZoom = d3.zoom().scaleExtent([0.3, 3])
+            .on('zoom', ev => svg.attr('transform', ev.transform));
+        outer.call(flowZoom).on('dblclick.zoom', null);
+        // auto-fit the chart to the visible pane
+        const fitK = Math.min(paneW / (WIDTH + 40), paneH / (HEIGHT + 40), 1);
+        outer.call(flowZoom.transform, d3.zoomIdentity
+            .translate(Math.max(8, (paneW - WIDTH * fitK) / 2), Math.max(8, (paneH - HEIGHT * fitK) / 2))
+            .scale(fitK));
+        const link = (x1, y1, x2, y2, hot) => svg.append('path')
+            .attr('fill', 'none').attr('stroke', hot ? '#E8593B' : '#8FA8C8')
+            .attr('stroke-width', hot ? 2 : 1.5).attr('marker-end', 'url(#flowarr)')
+            .attr('d', `M${x1},${y1} C${(x1 + x2) / 2},${y1} ${(x1 + x2) / 2},${y2} ${x2 - 4},${y2}`);
+        // row positions
+        let fy = 84; const fpos = {}, dpos = {};
+        dirNames.forEach(d => {
+            dirs[d].forEach(f => { fpos[f.id] = fy; fy += rowH; });
+            const ys = dirs[d].map(f => fpos[f.id]);
+            dpos[d] = ys.reduce((a, b) => a + b, 0) / ys.length;
+        });
+        const projY = Object.values(dpos).reduce((a, b) => a + b, 0) / Math.max(1, dirNames.length);
+        // column headers
+        [['PROJECT', 100], ['DIRECTORIES', dirX + 72], ['FILES', fileX + 80], ['WHAT HAPPENED', actX + 66], ['MEMORY', memX + 68]]
+            .forEach(([txt, x]) => svg.append('text').attr('x', x).attr('y', 42).attr('text-anchor', 'middle')
+                .attr('font-size', 10.5).attr('font-weight', 700).attr('letter-spacing', 1)
+                .attr('fill', 'var(--text-muted)').text(txt));
+        // project box
+        svg.append('rect').attr('x', 26).attr('y', projY - 25).attr('width', 148).attr('height', 50)
+            .attr('rx', 12).attr('fill', 'var(--navy)');
+        svg.append('text').attr('x', 100).attr('y', projY - 2).attr('text-anchor', 'middle')
+            .attr('fill', '#fff').attr('font-weight', 700).attr('font-size', 13.5).text(projectName || 'project');
+        svg.append('text').attr('x', 100).attr('y', projY + 15).attr('text-anchor', 'middle')
+            .attr('fill', '#9DB5D0').attr('font-size', 10).text(timelineData.length + ' events captured');
+        // memory cylinder — everything flows into the append-only log
+        const my = projY, cyl = svg.append('g');
+        cyl.append('rect').attr('x', memX).attr('y', my - 36).attr('width', 136).attr('height', 72)
+            .attr('fill', '#FFF6D9').attr('stroke', '#D8C27A');
+        cyl.append('ellipse').attr('cx', memX + 68).attr('cy', my - 36).attr('rx', 68).attr('ry', 12)
+            .attr('fill', '#FFEFB8').attr('stroke', '#D8C27A');
+        cyl.append('ellipse').attr('cx', memX + 68).attr('cy', my + 36).attr('rx', 68).attr('ry', 12)
+            .attr('fill', '#FFF6D9').attr('stroke', '#D8C27A');
+        cyl.append('text').attr('x', memX + 68).attr('y', my - 1).attr('text-anchor', 'middle')
+            .attr('font-size', 11.5).attr('font-weight', 700).attr('fill', '#7A6420').text('events.jsonl');
+        cyl.append('text').attr('x', memX + 68).attr('y', my + 15).attr('text-anchor', 'middle')
+            .attr('font-size', 9.5).attr('fill', '#7A6420').text('append-only memory');
+        // directories, files, chips
+        dirNames.forEach(d => {
+            const yc = dpos[d];
+            link(174, projY, dirX, yc);
+            svg.append('rect').attr('x', dirX).attr('y', yc - 21).attr('width', 145).attr('height', 42)
+                .attr('rx', 9).attr('fill', 'var(--surface2)').attr('stroke', 'var(--border-light)');
+            svg.append('text').attr('x', dirX + 72).attr('y', yc - 1).attr('text-anchor', 'middle')
+                .attr('font-size', 12).attr('font-weight', 600).attr('fill', 'var(--text)')
+                .text(d.length > 22 ? '…' + d.slice(-21) : d);
+            svg.append('text').attr('x', dirX + 72).attr('y', yc + 13).attr('text-anchor', 'middle')
+                .attr('font-size', 10).attr('fill', 'var(--text-dim)')
+                .text(dirs[d].length + (dirs[d].length > 1 ? ' files' : ' file'));
+            dirs[d].forEach(f => {
+                const y = fpos[f.id], hot = (f.failure_count || 0) >= 3;
+                link(dirX + 145, yc, fileX, y, hot);
+                svg.append('rect').attr('x', fileX).attr('y', y - 21).attr('width', 160).attr('height', 42)
+                    .attr('rx', 9).attr('fill', 'var(--surface)')
+                    .attr('stroke', hot ? 'var(--error)' : 'var(--border-light)').attr('stroke-width', hot ? 1.8 : 1);
+                svg.append('text').attr('x', fileX + 13).attr('y', y - 1)
+                    .attr('font-size', 12).attr('font-weight', 600).attr('fill', 'var(--text)')
+                    .text((f.label || f.id).length > 19 ? (f.label || f.id).slice(0, 18) + '…' : (f.label || f.id));
+                svg.append('text').attr('x', fileX + 13).attr('y', y + 13)
+                    .attr('font-size', 10).attr('fill', 'var(--text-dim)').text((f.event_count || 0) + ' events');
+                const st = chipStats[f.id];
+                const chips = [];
+                if (st.failed) chips.push([st.failed + ' failed', '#E8593B']);
+                if (st.fixed) chips.push([st.fixed + ' fixed', '#169F84']);
+                if (st.decisions) chips.push([st.decisions + ' decisions', '#6366F1']);
+                if (st.notes) chips.push([st.notes + ' notes', '#5A6B82']);
+                link(fileX + 160, y, actX, y, hot);
+                let cx = actX;
+                chips.slice(0, 3).forEach(([txt, col]) => {
+                    const w = txt.length * 6.2 + 18;
+                    svg.append('rect').attr('x', cx).attr('y', y - 12).attr('width', w).attr('height', 24)
+                        .attr('rx', 12).attr('fill', col + '15').attr('stroke', col);
+                    svg.append('text').attr('x', cx + w / 2).attr('y', y + 4).attr('text-anchor', 'middle')
+                        .attr('font-size', 10).attr('font-weight', 700).attr('fill', col).text(txt);
+                    cx += w + 7;
+                });
+                if (!chips.length) {
+                    svg.append('text').attr('x', actX).attr('y', y + 4)
+                        .attr('font-size', 10).attr('fill', 'var(--text-dim)').text('activity logged');
+                    cx = actX + 86;
+                }
+                link(Math.min(cx, memX - 22), y, memX, my + (y > my ? 28 : y < my ? -28 : 0));
+            });
+        });
+    }
+
     // View toggle
     const mapPane = document.querySelector('.map-graph-pane');
     let treeRendered = false;
     mapPane.classList.add('tree-mode');
     if (!treeRendered) { renderTree(); treeRendered = true; }
-    document.querySelectorAll('.map-view-btn').forEach(btn => {
+    document.querySelectorAll('.map-view-toggle .map-view-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            document.querySelectorAll('.map-view-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.map-view-toggle .map-view-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
+            mapPane.classList.remove('tree-mode', 'flow-mode');
             if (btn.dataset.view === 'tree') {
                 mapPane.classList.add('tree-mode');
                 if (!treeRendered) { renderTree(); treeRendered = true; }
-            } else {
-                mapPane.classList.remove('tree-mode');
+            } else if (btn.dataset.view === 'flow') {
+                mapPane.classList.add('flow-mode');
+                renderMapFlow();
             }
         });
     });
+    // Details pane collapse — gives every map view the full width
+    const mapSplit = document.querySelector('.map-split');
+    document.getElementById('map-details-btn').addEventListener('click', function () {
+        mapSplit.classList.toggle('details-collapsed');
+        this.textContent = mapSplit.classList.contains('details-collapsed') ? 'Show details' : 'Hide details';
+        if (mapPane.classList.contains('tree-mode')) renderTree();
+        else if (mapPane.classList.contains('flow-mode')) renderMapFlow();
+    });
     window.addEventListener('resize', () => {
         if (mapPane.classList.contains('tree-mode')) renderTree();
+        else if (mapPane.classList.contains('flow-mode')) renderMapFlow();
     });
 
     // ══════════════════════════════════════════
