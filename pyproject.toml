@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "projectmem"
-version = "0.1.5"
+version = "0.1.6"
 description = "Local-first memory + judgment layer for AI coding agents — warns before repeating failed fixes."
 authors = [{ name = "Ripon Chandra Malo" }]
 readme = "README.md"
@@ -52,6 +52,10 @@ pjm-mcp = "projectmem.mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/projectmem"]
+
+[tool.hatch.build.targets.sdist]
+# marketing assets are linked from GitHub in the README; no need to ship them to pip users
+exclude = ["brand/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

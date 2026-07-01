@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.1.6
+
+**The visualization release: your project's memory is now something you can watch — and share.** The dashboard grows from four tabs to six, every new view is rendered from the same real event log, and nothing new is required: zero new dependencies, no schema changes, no CLI changes. Includes the Story Map readability controls contributed by @hanley-development (#7, which also folds in #6 — thanks!).
+
+### New: Showoff — animated story scenes with a built-in recorder
+
+A new dashboard tab with three animated scenes, all driven by your real events: **Story Replay** (the project's history builds itself node by node on a force canvas — auto-loops, scrubber, live captions), **Orbit** (files orbit the project, events orbit their file), and **Universe** (the project as a rotating spiral galaxy; real events blink as bright stars). Click any node for its real details — the field dims, a halo pulses, and its connections light up; click again to release. Play/pause and speed controls throughout, and the animation only runs while the tab is open.
+
+**REC 10–60 s** records the stage via the browser's own MediaRecorder and downloads a `.webm` — rendered 100% locally, with a toggleable *"made with projectmem"* badge baked into the video. Recording stops safely if you navigate away. (X/Twitter prefers mp4; most other platforms accept webm directly.)
+
+### New: Flow — the Project Map's default view
+
+A layered left-to-right flowchart of the project story: **PROJECT → DIRECTORIES → FILES → WHAT HAPPENED → MEMORY.** Files with 3+ failures are outlined red with red flow lines, every file carries its outcome chips (failed / fixed / decisions / notes), and everything flows into an `events.jsonl` cylinder — the append-only memory, drawn as what it is. Zoom and pan like the other views; auto-fits on open. Tree and Graph remain one click away, and a new **Hide details** toggle collapses the PROJECT_MAP.md pane to give any view the full width. No code parsing — it is a pure layout over the same event graph the Story Map uses.
+
+### New: Time Spine — the Timeline's default view
+
+A central real-time axis you scroll: day pills, *"Nh quiet"* gap markers, and the story branching into two meaningful sides — **problems on the left** (issues; failed / partial / worked attempts), **knowledge on the right** (fixes, decisions, notes). Hover any card and its entire issue thread stays lit while everything else dims — you can watch one bug's story thread down through time. The classic list view remains as **Details**.
+
+### From PR #7 (@hanley-development): Story Map readability controls
+
+Collapse dense files (10+ events) into a draggable bubble, collapse directories with click-to-drill-down, expand all, and reset focus. Label noise reduced; file-focus mode dims unrelated nodes; file-only locations (no `:line`) now link correctly (folds in #6). Windows-style paths normalized.
+
+### Also
+
+- README gains a "New in 0.1.6" showcase with dashboard screenshots.
+- 8 new tests pin the new template surface (115 total).
+
 ## 0.1.5
 
 **A reliability release: same features, fewer ways to break.** Three community fixes (thanks @hanley-development) make projectmem safer to run everywhere — you can now close a *specific* issue by ID, MCP git calls can't hang a stdio session, and `pjm brief` / `pjm precheck` no longer crash on non-UTF-8 Windows consoles. No new dependencies, no schema changes.

@@ -46,9 +46,36 @@
 | Doc | What's in it |
 |---|---|
 | **[TUTORIAL.md](TUTORIAL.md)** | 15-minute step-by-step walkthrough — set up projectmem on your own project, watch the lifecycle, see the pre-commit warning fire. |
-| **[CHANGELOG.md](CHANGELOG.md)** | Release history. Latest: v0.1.4 — the accountable-judgment release: stale-memory detection, decision supersede, precheck snooze, `pjm brief`, failed-approach surfacing, CLAUDE.md export, dashboard Overview. |
+| **[CHANGELOG.md](CHANGELOG.md)** | Release history. Latest: v0.1.6 — the visualization release: the Showoff tab (animated story scenes + built-in video recorder), the Flow project map, and the Time Spine timeline. |
 | **[Research paper (arXiv:2606.12329)](https://arxiv.org/abs/2606.12329)** | *PROJECTMEM: A Local-First, Event-Sourced Memory and Judgment Layer for AI Coding Agents* — the peer-readable version: design, Memory-as-Governance framing, capability comparison, and the 207-event dogfooding study. |
 | **[LICENSE](LICENSE)** | MIT |
+
+---
+
+## ✨ New in 0.1.6 — the visualization release
+
+Your project's memory is now something you can *watch* — and share.
+
+- 🎬 **Showoff** — a new dashboard tab with three animated story scenes, all rendered from your real event log: **Story Replay** (watch your project's history build itself, node by node), **Orbit** (files orbit the project, events orbit their file), and **Universe** (your project as a rotating galaxy — every bright star is a real issue, attempt, fix, or decision; click one for its full details).
+- ⏺ **Built-in recorder** — hit REC (10–60 s) and Showoff downloads a `.webm` clip of the animation, rendered 100% locally with a "made with projectmem" badge. Your debugging story, ready for a tweet or a standup.
+- 🗺️ **Flow** — the Project Map's new default view: a layered flowchart reading `PROJECT → DIRECTORIES → FILES → WHAT HAPPENED → MEMORY`. Files with repeated failures glow red along their path, every file shows its outcome chips, and everything flows into the `events.jsonl` cylinder. Zoom, pan, or collapse the details pane. Tree and Graph views are one click away.
+- 🧵 **Time Spine** — the Timeline's new default view: a real-time axis you scroll, with **problems branching left** (issues, failed attempts) and **knowledge branching right** (fixes, decisions, notes). Hover any card and its whole issue thread lights up. The classic list remains as "Details".
+- 🛡️ Also included: v0.1.5's reliability fixes (`pjm fix --issue <id>` targeted closing, hang-proof MCP git calls, encoding-safe console output on Windows) — community-contributed by [@hanley-development](https://github.com/hanley-development), who also built the Story Map readability controls in this release.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/riponcm/projectmem/main/brand/dashboard-showoff-universe.png" alt="Showoff — your project as a rotating galaxy, every star a real event" width="800" />
+  <br /><em>Showoff · Universe — every bright star is a real event from this project's memory</em>
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/riponcm/projectmem/main/brand/dashboard-projectmap-flow.png" alt="Flow — layered project map from project to memory" width="800" />
+  <br /><em>Project Map · Flow — what happened, file by file, flowing into append-only memory</em>
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/riponcm/projectmem/main/brand/dashboard-timeline-spine.png" alt="Time Spine — problems branch left, knowledge branches right" width="800" />
+  <br /><em>Timeline · Time Spine — problems on the left, knowledge on the right, real time down the middle</em>
+</p>
 
 ---
 
@@ -85,7 +112,7 @@ That's it. `pjm init` installs three git hooks (pre-commit warnings, post-commit
 - **Cross-Project Memory** — Lessons learned in one repo follow you forever. Library gotchas, decisions, and patterns live in `~/.projectmem/global/` and auto-inherit into every new project that matches your stack.
 - **Real-time File Watcher** — Background daemon detects rapid edits to the same file (debugging sessions) between commits. Battery-aware, gitignore-aware, auto-started by `pjm init`.
 - **Native MCP Server** — Plugs into Claude Desktop, Cursor, Antigravity, Codex, and any MCP-compatible tool. 14 native tools force the AI to read context, check files for known failures, and log work automatically. Verified end-to-end against all four clients.
-- **Interactive Dashboard** — `pjm visualize` opens a four-tab D3.js dashboard: Story Map (failure heatmap), ROI Dashboard, Project Map (tree or graph view), Timeline.
+- **Interactive Dashboard** *(expanded in 0.1.6)* — `pjm visualize` opens a six-tab local dashboard: Overview, Story Map (failure heatmap with collapse/focus controls), ROI Dashboard, Project Map (**Flow** / Tree / Graph), Timeline (**Time Spine** / Details), and **Showoff** — animated story scenes with a built-in video recorder.
 - **100% Local** — No cloud, no telemetry, no accounts. Your code, your memory, your machine.
 
 ## How It Compares
@@ -294,7 +321,7 @@ All 14 tools your AI can call:
 | `pjm init` | Initialize memory + auto-install hooks + inherit global memory |
 | `pjm log <text>` | Start a new issue / debugging session |
 | `pjm attempt <text> [--failed\|--worked]` | Record a fix attempt outcome |
-| `pjm fix <text>` | Record the confirmed fix and close the issue |
+| `pjm fix <text> [--issue <id>]` | Record the confirmed fix and close the issue — `--issue` targets a specific one *(new in 0.1.5)* |
 | `pjm decision <text> [--supersedes <id>]` | Record an architectural decision; optionally retire a prior one (old event stays in the log, tagged) |
 | `pjm note <text>` | Record durable context or a gotcha |
 | `pjm show` | Print the current summary |
@@ -317,7 +344,7 @@ All 14 tools your AI can call:
 
 | Command | Purpose |
 |---|---|
-| `pjm visualize` | Open interactive D3.js dashboard |
+| `pjm visualize` | Open the six-tab local dashboard (Overview, Story Map, ROI, Project Map, Timeline, Showoff) |
 | `pjm stats` | Token ROI summary in the terminal |
 | `pjm backfill` | Auto-populate memory from git history |
 | `pjm hooks install\|uninstall` | Manage git hooks manually |
