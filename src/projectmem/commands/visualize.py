@@ -653,6 +653,45 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
             background:var(--surface); border:1px solid var(--border); border-radius:8px; }
         .map-split.details-collapsed .map-text-pane { display:none; }
         .map-split.details-collapsed .map-graph-pane { border-right:none; }
+
+        /* ═══ Timeline — "Time Spine" view ═══ */
+        .tl-toggle { position:absolute; top:14px; left:14px; z-index:6;
+            display:flex; gap:0; padding:3px;
+            background:var(--surface); border:1px solid var(--border); border-radius:8px; }
+        #tl-spine { position:absolute; inset:0; overflow-y:auto; padding:56px 20px 60px; }
+        #panel-timeline.list-mode #tl-spine { display:none; }
+        #panel-timeline .timeline-view { display:none; }
+        #panel-timeline.list-mode .timeline-view { display:block; padding-top:56px; }
+        .tsp-colhead { display:flex; justify-content:space-between; max-width:1000px; margin:0 auto 14px;
+            font-size:11px; font-weight:700; letter-spacing:1.2px; color:var(--text-muted); }
+        .tsp-colhead span { width:46%; text-align:center; }
+        .tsp-wrap { position:relative; max-width:1000px; margin:0 auto; }
+        .tsp-spine { position:absolute; left:50%; top:0; bottom:0; width:2px;
+            background:linear-gradient(#C7D6E8,#9FB4CE); transform:translateX(-1px); }
+        .tsp-day { position:relative; text-align:center; margin:24px 0 16px; z-index:2; }
+        .tsp-day b { background:var(--navy); color:#fff; font-size:11.5px; padding:5px 15px; border-radius:999px; }
+        .tsp-gap { position:relative; text-align:center; margin:8px 0; z-index:2; }
+        .tsp-gap span { background:var(--bg); color:var(--text-muted); font-size:10.5px;
+            padding:2px 10px; border:1px dashed #C7D6E8; border-radius:999px; }
+        .tsp-row { position:relative; display:flex; margin:11px 0; min-height:48px; }
+        .tsp-dot { position:absolute; left:50%; top:22px; width:11px; height:11px; border-radius:50%;
+            transform:translate(-50%,-50%); border:2.5px solid var(--surface); box-shadow:0 0 0 1.5px #C7D6E8; z-index:3; }
+        .tsp-tick { position:absolute; left:50%; top:22px; height:1.5px; width:5%; background:#C7D6E8; z-index:1; }
+        .tsp-row.tsp-L .tsp-tick { transform:translate(-100%,-50%); }
+        .tsp-row.tsp-R .tsp-tick { transform:translate(0,-50%); }
+        .tsp-card { width:44%; background:var(--surface); border:1px solid var(--border); border-radius:11px;
+            padding:9px 13px; box-shadow:0 1px 3px rgba(11,42,74,.05); transition:opacity .15s, box-shadow .15s; }
+        .tsp-row.tsp-L { justify-content:flex-start; }
+        .tsp-row.tsp-R { justify-content:flex-end; }
+        .tsp-row.tsp-L .tsp-card { border-right:3px solid var(--ac); }
+        .tsp-row.tsp-R .tsp-card { border-left:3px solid var(--ac); }
+        .tsp-k { font-size:10.5px; font-weight:800; letter-spacing:.4px; color:var(--ac); }
+        .tsp-k .tsp-t { float:right; color:var(--text-muted); font-weight:600; }
+        .tsp-s { font-size:12.5px; line-height:1.45; margin-top:3px; color:var(--text); }
+        .tsp-m { font-size:10.5px; color:var(--text-muted); margin-top:4px; font-family:'JetBrains Mono', ui-monospace, monospace; }
+        .tsp-m .tsp-iss { color:var(--primary); font-weight:700; margin-right:8px; }
+        #tl-spine.tsp-hl .tsp-card { opacity:.22; }
+        #tl-spine.tsp-hl .tsp-card.tsp-on { opacity:1; box-shadow:0 3px 14px rgba(31,111,235,.20); }
         .map-view-toggle {
             position:absolute; top:14px; left:14px; z-index:5;
             display:flex; gap:0; padding:3px;
@@ -1063,9 +1102,9 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
             <div class="map-split">
                 <div class="map-graph-pane">
                     <div class="map-view-toggle">
-                        <button class="map-view-btn active" data-view="tree">Tree</button>
+                        <button class="map-view-btn active" data-view="flow">Flow</button>
+                        <button class="map-view-btn" data-view="tree">Tree</button>
                         <button class="map-view-btn" data-view="graph">Graph</button>
-                        <button class="map-view-btn" data-view="flow">Flow</button>
                     </div>
                     <div class="map-details-toggle">
                         <button class="map-view-btn" id="map-details-btn" title="show / hide the PROJECT_MAP.md pane">Hide details</button>
@@ -1085,7 +1124,15 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
 
         <!-- Timeline -->
         <div class="panel" id="panel-timeline">
-            <div class="timeline-view">
+            <div class="map-view-toggle tl-toggle">
+                <button class="map-view-btn active" data-tlview="spine">Spine</button>
+                <button class="map-view-btn" data-tlview="list">Details</button>
+            </div>
+            <div id="tl-spine">
+                <div class="tsp-colhead"><span>PROBLEMS</span><span>KNOWLEDGE</span></div>
+                <div class="tsp-wrap"><div class="tsp-spine"></div><div id="tsp-body"></div></div>
+            </div>
+            <div class="timeline-view" id="tl-listwrap">
                 <div class="tl-header">
                     <div class="tl-activity" id="tl-activity"></div>
                     <div class="tl-filters" id="tl-filters"></div>
@@ -2305,14 +2352,14 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
         });
     }
 
-    // View toggle
+    // View toggle — Flow is the default view
     const mapPane = document.querySelector('.map-graph-pane');
     let treeRendered = false;
-    mapPane.classList.add('tree-mode');
-    if (!treeRendered) { renderTree(); treeRendered = true; }
-    document.querySelectorAll('.map-view-toggle .map-view-btn').forEach(btn => {
+    mapPane.classList.add('flow-mode');
+    renderMapFlow();
+    document.querySelectorAll('.map-view-toggle:not(.tl-toggle) .map-view-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            document.querySelectorAll('.map-view-toggle .map-view-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.map-view-toggle:not(.tl-toggle) .map-view-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             mapPane.classList.remove('tree-mode', 'flow-mode');
             if (btn.dataset.view === 'tree') {
@@ -2447,6 +2494,70 @@ VIZ_TEMPLATE = """<!DOCTYPE html>
         listEl.innerHTML = html;
     }
     renderTimeline();
+
+    // TAB 4b: Timeline — "Time Spine" view (default)
+    // Central real-time axis; problems branch left, knowledge branches right.
+    function renderTimelineSpine() {
+        const body = document.getElementById('tsp-body');
+        if (!body) return;
+        const tspEsc = s => String(s == null ? '' : s).replace(/[&<>]/g, c => c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;');
+        function tspMeta(e) {
+            if (e.type === 'attempt') {
+                if (e.outcome === 'failed') return ['#E8593B', 'ATTEMPT — FAILED', 'L'];
+                if (e.outcome === 'worked') return ['#169F84', 'ATTEMPT — WORKED', 'L'];
+                return ['#E8A33B', 'ATTEMPT — PARTIAL', 'L'];
+            }
+            if (e.type === 'issue') return ['#1F6FEB', 'ISSUE OPENED', 'L'];
+            if (e.type === 'fix') return ['#169F84', 'FIX', 'R'];
+            if (e.type === 'decision') return ['#6366F1', 'DECISION', 'R'];
+            if (e.type === 'note') return ['#5A6B82', 'NOTE', 'R'];
+            return ['#8A99AD', (e.type || 'EVENT').toUpperCase(), 'R'];
+        }
+        const sorted = [...timelineData].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        let html = '', lastDay = null, lastT = null;
+        sorted.forEach(e => {
+            const d = new Date(e.timestamp);
+            const ok = !isNaN(d.getTime());
+            const day = ok ? d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : 'undated';
+            const hm = ok ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '';
+            if (day !== lastDay) { html += '<div class="tsp-day"><b>' + day + '</b></div>'; lastDay = day; lastT = null; }
+            else if (ok && lastT && (d.getTime() - lastT) > 3 * 3600 * 1000) {
+                html += '<div class="tsp-gap"><span>' + Math.round((d.getTime() - lastT) / 3600000) + 'h quiet</span></div>';
+            }
+            if (ok) lastT = d.getTime();
+            const [col, kind, side] = tspMeta(e);
+            const iss = e.issue_id ? '<span class="tsp-iss">#' + tspEsc(e.issue_id) + '</span>' : '';
+            html += '<div class="tsp-row tsp-' + side + '" data-issue="' + tspEsc(e.issue_id || '') + '">'
+                + '<div class="tsp-tick"></div><div class="tsp-dot" style="background:' + col + '"></div>'
+                + '<div class="tsp-card" style="--ac:' + col + '">'
+                + '<div class="tsp-k">' + kind + '<span class="tsp-t">' + hm + '</span></div>'
+                + '<div class="tsp-s">' + tspEsc(e.summary || '') + '</div>'
+                + '<div class="tsp-m">' + iss + tspEsc(e.location || '') + '</div>'
+                + '</div></div>';
+        });
+        body.innerHTML = html || '<div class="flow-empty">No events yet — start logging to build your timeline.</div>';
+        const spineEl = document.getElementById('tl-spine');
+        body.querySelectorAll('.tsp-row').forEach(r => {
+            r.addEventListener('mouseenter', () => {
+                const iss = r.dataset.issue; if (!iss) return;
+                spineEl.classList.add('tsp-hl');
+                body.querySelectorAll('.tsp-row').forEach(x =>
+                    x.querySelector('.tsp-card').classList.toggle('tsp-on', x.dataset.issue === iss));
+            });
+            r.addEventListener('mouseleave', () => {
+                spineEl.classList.remove('tsp-hl');
+                body.querySelectorAll('.tsp-card').forEach(c => c.classList.remove('tsp-on'));
+            });
+        });
+    }
+    renderTimelineSpine();
+    document.querySelectorAll('.tl-toggle .map-view-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.tl-toggle .map-view-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('panel-timeline').classList.toggle('list-mode', btn.dataset.tlview === 'list');
+        });
+    });
 
     // ══════════════════════════════════════════
     // TAB 5: SHOWOFF — animated story scenes + recorder

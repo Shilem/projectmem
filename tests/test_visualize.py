@@ -326,3 +326,15 @@ def test_template_has_project_map_flow_view() -> None:
     assert "renderMapFlow" in VIZ_TEMPLATE
     # the flow ends in the append-only memory cylinder
     assert "events.jsonl" in VIZ_TEMPLATE
+
+
+def test_template_has_timeline_spine_view() -> None:
+    """Timeline ships two views: Spine (default) and the Details list (0.1.6)."""
+    from projectmem.commands.visualize import VIZ_TEMPLATE
+
+    assert 'data-tlview="spine"' in VIZ_TEMPLATE
+    assert 'data-tlview="list"' in VIZ_TEMPLATE
+    assert 'id="tl-spine"' in VIZ_TEMPLATE
+    assert "renderTimelineSpine" in VIZ_TEMPLATE
+    # spine defaults to active; Flow is the Project Map default
+    assert VIZ_TEMPLATE.index('data-view="flow"') < VIZ_TEMPLATE.index('data-view="tree"')
