@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/projectmem/projectmemdoc/main/logo/projectmem-wordmark-800.png" alt="projectmem" width="420" />
 
   <p><b>We don't make AI smarter. We make it experienced.</b></p>
-  <p><i>The local-first memory + judgment layer for AI coding agents. Save up to 50%+ of AI tokens. Stop repeating yesterday's bug.</i></p>
+  <p><i><b>AI coding memory</b> — the local-first memory + judgment layer for AI coding agents. Save up to 50%+ of AI tokens. Stop repeating yesterday's bug.</i></p>
 
   <p>
     <a href="https://pypi.org/project/projectmem/"><img src="https://img.shields.io/pypi/v/projectmem.svg?color=4c1d95&label=pypi" alt="PyPI version"></a>
@@ -28,6 +28,31 @@
 
   <img src="https://raw.githubusercontent.com/projectmem/projectmemdoc/main/demo/precheck-warning.gif" alt="projectmem pre-commit warning demo" width="720" />
 </div>
+
+---
+
+## What is AI coding memory?
+
+**AI coding memory is a persistent record of what happened while building a
+project** — the issues hit, the approaches attempted, the fixes that worked and
+the decisions made — stored so an AI coding agent can read it at the start of a
+new session. Without it every session begins from zero.
+
+projectmem is an open-source **agent memory** layer built for that job. It is
+**local-first**: memory lives in a plain `.projectmem/` directory inside your
+repository, with no cloud, no account and no telemetry. A native **MCP server**
+exposes 15 tools to Claude Code, Claude Desktop, Cursor, Antigravity and Codex,
+so your agent reads memory and logs its work on its own.
+
+Unlike chat-history memory tools, projectmem stores **typed events** — issues,
+attempts, fixes, decisions, notes — which is what makes the one thing no other
+tool does possible: a **pre-commit warning** that fires *before* you repeat an
+approach that already failed.
+
+```bash
+pip install projectmem
+cd your-project && pjm init
+```
 
 ---
 
