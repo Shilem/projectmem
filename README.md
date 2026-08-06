@@ -16,6 +16,10 @@
   </p>
 
   <p>
+    <a href="https://ossdrop.com/tool/projectmem"><img src="https://ossdrop.com/badge/projectmem" width="250" height="56" alt="projectmem on OSSDrop" /></a>
+  </p>
+
+  <p>
     <a href="https://projectmem.dev"><b>Website</b></a> •
     <a href="https://projectmem.dev/guide"><b>Guide</b></a> •
     <a href="https://projectmem.dev/demo"><b>Demo</b></a> •
