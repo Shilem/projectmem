@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/projectmem/projectmemdoc/main/logo/projectmem-wordmark-800.png" alt="projectmem" width="420" />
 
   <p><b>We don't make AI smarter. We make it experienced.</b></p>
-  <p><i><b>AI coding memory</b> — the local-first memory + judgment layer for AI coding agents. Save up to 50%+ of AI tokens. Stop repeating yesterday's bug.</i></p>
+  <p><i><b>Coding agent memory</b> — the local-first memory + judgment layer for AI coding agents. Save up to 50%+ of AI tokens. Stop repeating yesterday's bug.</i></p>
 
   <p>
     <a href="https://pypi.org/project/projectmem/"><img src="https://img.shields.io/pypi/v/projectmem.svg?color=4c1d95&label=pypi" alt="PyPI version"></a>
@@ -34,9 +34,9 @@
 
 ---
 
-## What is AI coding memory?
+## What is coding agent memory?
 
-**AI coding memory is a persistent record of what happened while building a
+**Coding agent memory is a persistent record of what happened while building a
 project** — the issues hit, the approaches attempted, the fixes that worked and
 the decisions made — stored so an AI coding agent can read it at the start of a
 new session. Without it every session begins from zero.
