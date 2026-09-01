@@ -1,14 +1,8 @@
-# projectmem — Tutorial
+# ProjectMem tutorial
 
-> **Watch the 60-second promo:** [youtu.be/YCqfJ8-XVqY](https://youtu.be/YCqfJ8-XVqY)
-> A full screen-recorded walkthrough is coming soon — this written version
-> covers the same flow step-by-step so you can follow along on your own
-> project.
-
-This is the 15-minute tour. By the end you'll have set up projectmem on
-a real project, watched the AI agent log a bug → record a failed attempt
-→ record the fix, and seen the **pre-commit warning** catch you the next
-time you almost repeat the same mistake.
+This guide uses the [Shilem/projectmem](https://github.com/Shilem/projectmem)
+fork. It shows how to install the source locally, initialize another Git
+repository, and connect an MCP-capable AI client.
 
 ---
 
@@ -21,15 +15,26 @@ time you almost repeat the same mistake.
 
 ---
 
-## Step 1 — Install
+## Step 1 — Install this fork
+
+Clone the repository if you want the current source or plan to contribute:
 
 ```bash
-pip install projectmem
+git clone https://github.com/Shilem/projectmem.git
+cd projectmem
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e ".[dev]"
+pjm --help
 ```
 
-Three console commands ship: `pjm` (the CLI), `pjm-mcp` (the legacy
-one-project MCP server), and `pjm-mcp-global` (the recommended multi-project
-MCP server that your AI client talks to).
+An editable installation follows the source after `git pull`. If you only want
+to use the command-line tool, run `pipx install
+"git+https://github.com/Shilem/projectmem.git"` instead.
+
+The package installs `pjm`, `pjm-mcp`, and `pjm-mcp-global`. The global MCP
+server is the normal choice for new setups.
 
 ---
 
@@ -44,12 +49,10 @@ You should see, in order:
 
 1. `.projectmem/` directory created with `events.jsonl`, `summary.md`,
    `PROJECT_MAP.md`, `AI_INSTRUCTIONS.md`.
-2. `CLAUDE.md` created at the repo root — the rules-file bridge that
-   instructs AI clients to call projectmem's MCP tools before reading
-   source.
-3. `PROJECT_MAP.md` **pre-populated** from your `pyproject.toml` /
-   `package.json` / `Cargo.toml` / `go.mod` — no manual stack tour
-   needed (new in 0.1.3).
+2. `AGENTS.md` and `CLAUDE.md` receive a small ProjectMem bridge so compatible
+   AI clients know to load project memory first.
+3. `PROJECT_MAP.md` is pre-populated from your `pyproject.toml` /
+   `package.json` / `Cargo.toml` / `go.mod` — no manual stack tour needed.
 4. **Git hooks installed** — `pre-commit` for failure warnings,
    `post-commit` and `post-merge` for auto-capture.
 5. A printed **global MCP config block** — copy it once. Future `pjm init`
@@ -202,12 +205,11 @@ In about 15 minutes you exercised every part of projectmem:
 ## Common gotchas
 
 - **Pre-commit warning doesn't fire** → `.git/hooks/pre-commit` doesn't
-  exist. Run `pjm hooks install`. Under conda/venv, 0.1.3 bakes the
-  absolute pjm path into the hook — confirm with `head .git/hooks/pre-commit`.
-- **Agent re-reads files instead of using memory** → your client may not
-  surface the MCP `instructions=` field strongly. projectmem also writes
-  a `CLAUDE.md` rules file at the repo root for exactly this — open
-  that file and confirm the bridge block is intact.
+  exist. Run `pjm hooks install`, then confirm the hook with
+  `head .git/hooks/pre-commit`.
+- **Agent re-reads files instead of using memory** → check the ProjectMem
+  bridge blocks in `AGENTS.md` and `CLAUDE.md`, then fully restart the AI
+  client after adding its MCP configuration.
 - **Multiple machines / team members** → `.projectmem/` is meant to be
   **committed** to git. Each clone inherits the memory. Don't
   `.gitignore` it.
@@ -219,8 +221,8 @@ In about 15 minutes you exercised every part of projectmem:
 - **Cross-project memory:** lessons learned in one repo can surface in
   others with the same stack (`~/.projectmem/global/`). Try
   `pjm global show` to see what's accumulated across your machine.
-- **Issues + feature requests:** [github.com/riponcm/projectmem/issues](https://github.com/riponcm/projectmem/issues).
+- **Issues + feature requests:** [github.com/Shilem/projectmem/issues](https://github.com/Shilem/projectmem/issues).
 
 ---
 
-*Last updated for projectmem 0.1.3.*
+*Last updated for the Shilem fork, version 0.2.0.*

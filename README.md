@@ -1,36 +1,13 @@
-<!-- mcp-name: io.github.riponcm/projectmem -->
+# ProjectMem
 
-<div align="center">
-  <img src="https://raw.githubusercontent.com/projectmem/projectmemdoc/main/logo/projectmem-wordmark-800.png" alt="projectmem" width="420" />
+This is the actively maintained fork at
+[Shilem/projectmem](https://github.com/Shilem/projectmem). It keeps the
+ProjectMem command names (`pjm`, `pjm-mcp`, and `pjm-mcp-global`) while adding
+the current multi-project MCP and local-search work in this repository.
 
-  <p><b>We don't make AI smarter. We make it experienced.</b></p>
-  <p><i><b>Coding agent memory</b> — the local-first memory + judgment layer for AI coding agents. Save up to 50%+ of AI tokens. Stop repeating yesterday's bug.</i></p>
-
-  <p>
-    <a href="https://pypi.org/project/projectmem/"><img src="https://img.shields.io/pypi/v/projectmem.svg?color=4c1d95&label=pypi" alt="PyPI version"></a>
-    <a href="https://pypi.org/project/projectmem/"><img src="https://img.shields.io/pypi/pyversions/projectmem.svg?color=3b82f6" alt="Python Versions"></a>
-    <a href="https://pepy.tech/project/projectmem"><img src="https://static.pepy.tech/personalized-badge/projectmem?period=total&units=abbreviation&left_color=grey&right_color=brightgreen&left_text=downloads" alt="PyPI total downloads"></a>
-    <a href="https://github.com/riponcm/projectmem/stargazers"><img src="https://img.shields.io/github/stars/riponcm/projectmem?style=flat&color=f59e0b&label=stars" alt="GitHub stars"></a>
-    <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-3b82f6.svg" alt="License: MIT"></a>
-    <a href="https://arxiv.org/abs/2606.12329"><img src="https://img.shields.io/badge/arXiv-2606.12329-b31b1b.svg" alt="arXiv paper"></a>
-  </p>
-
-  <p>
-    <a href="https://ossdrop.com/tool/projectmem"><img src="https://ossdrop.com/badge/projectmem" width="250" height="56" alt="projectmem on OSSDrop" /></a>
-  </p>
-
-  <p>
-    <a href="https://projectmem.dev"><b>Website</b></a> •
-    <a href="https://projectmem.dev/guide"><b>Guide</b></a> •
-    <a href="https://projectmem.dev/demo"><b>Demo</b></a> •
-    <a href="https://projectmem.dev/changelog"><b>Changelog</b></a> •
-    <a href="https://arxiv.org/abs/2606.12329"><b>Paper</b></a>
-  </p>
-
-  <br />
-
-  <img src="https://raw.githubusercontent.com/projectmem/projectmemdoc/main/demo/precheck-warning.gif" alt="projectmem pre-commit warning demo" width="720" />
-</div>
+The fork is not published as its own PyPI distribution. `pip install
+projectmem` may install a different release, so install from this repository
+when you need the code shown here.
 
 ---
 
@@ -52,30 +29,17 @@ attempts, fixes, decisions, notes — which is what makes the one thing no other
 tool does possible: a **pre-commit warning** that fires *before* you repeat an
 approach that already failed.
 
-```bash
-pip install projectmem
-cd your-project && pjm init
-```
+See [Install from this repository](#install-from-this-repository).
 
 ---
 
-## 🎬 Watch the demo
-
-<p align="center">
-  <a href="https://youtu.be/pELGdXHj_Ls">
-    <img src="https://img.youtube.com/vi/pELGdXHj_Ls/maxresdefault.jpg" alt="projectmem — 60-second demo" width="720" />
-  </a>
-  <br />
-  <em>Full screen-recorded tutorial- watch on YouTube</em>
-</p>
-
-## 📚 Docs
+## Docs
 
 | Doc | What's in it |
 |---|---|
-| **[TUTORIAL.md](TUTORIAL.md)** | 15-minute step-by-step walkthrough — set up projectmem on your own project, watch the lifecycle, see the pre-commit warning fire. |
-| **[CHANGELOG.md](CHANGELOG.md)** | Release history. Latest: v0.2.0 — the workspace release: the cross-project `pjm dashboard` (serverless + live `--serve`), code structure & relations with failure-heat overlay, and the `plan.md` intent file. |
-| **[Research paper (arXiv:2606.12329)](https://arxiv.org/abs/2606.12329)** | *PROJECTMEM: A Local-First, Event-Sourced Memory and Judgment Layer for AI Coding Agents* — the peer-readable version: design, Memory-as-Governance framing, capability comparison, and the 207-event dogfooding study. |
+| **[TUTORIAL.md](TUTORIAL.md)** | A walkthrough for installing this fork, initializing a project, and connecting an AI client. |
+| **[CHANGELOG.md](CHANGELOG.md)** | Release history from the inherited project. |
+| **[SECURITY.md](SECURITY.md)** | Security policy for this repository. |
 | **[LICENSE](LICENSE)** | MIT |
 
 ---
@@ -90,15 +54,40 @@ The model isn't the problem. **The architecture is.** Stateless models need a me
 
 `projectmem` is the local-first memory + judgment layer that sits above your AI tools. It captures every failed attempt, decision, and gotcha — then injects that experience back into future AI sessions. Git tracks *what* changed. `projectmem` tracks *why* it changed, what was tried, and what failed.
 
-## Install
+## Install from this repository
+
+For local development, clone the repository and use an editable installation:
 
 ```bash
-pip install projectmem
-cd your-project
+git clone https://github.com/Shilem/projectmem.git
+cd projectmem
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e ".[dev]"
+pjm --help
+```
+
+After `git pull`, the editable install uses the updated source immediately.
+
+If you only want the commands and do not plan to edit the source, install the
+fork with `pipx` instead:
+
+```bash
+pipx install "git+https://github.com/Shilem/projectmem.git"
+pjm --help
+```
+
+Then initialize each project that should use ProjectMem:
+
+```bash
+cd path/to/your-project
 pjm init
 ```
 
-That's it. `pjm init` installs three git hooks (pre-commit warnings, post-commit classification, post-merge tracking), auto-starts a real-time file watcher, inherits cross-project memory if available, and creates `.projectmem/`. Capture is active from minute one.
+`pjm init` creates `.projectmem/`, installs Git hooks, starts the optional
+watcher, and prints the one-time MCP configuration. It also refreshes the
+ProjectMem bridge in `AGENTS.md` and `CLAUDE.md` when those files are enabled.
 
 > The canonical command is `projectmem`. A `pjm` alias is installed for speed.
 
@@ -116,7 +105,7 @@ That's it. `pjm init` installs three git hooks (pre-commit warnings, post-commit
 Everything stays 100% local — the global dashboard is a read-time aggregate, never a central honeypot of your code's history.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/riponcm/projectmem/main/brand/dashboard-global.png" alt="projectmem global dashboard — every project in one read-time view" width="880" />
+  <img src="https://raw.githubusercontent.com/Shilem/projectmem/main/brand/dashboard-global.png" alt="projectmem global dashboard — every project in one read-time view" width="880" />
   <br /><em>Global Dashboard — every <code>pjm init</code>-ed project in one view: grades, issues, savings, and a "needs attention" list, aggregated at read time. Each card opens that repo's own dashboard.</em>
 </p>
 
@@ -130,17 +119,17 @@ Your project's memory is also something you can *watch* — and share.
 - 🧵 **Time Spine** — the Timeline's default view: a real-time axis you scroll, with **problems branching left** (issues, failed attempts) and **knowledge branching right** (fixes, decisions, notes). Hover any card and its whole issue thread lights up. The classic list remains as "Details".
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/riponcm/projectmem/main/brand/dashboard-showoff-universe.png" alt="Showoff — your project as a rotating galaxy, every star a real event" width="800" />
+  <img src="https://raw.githubusercontent.com/Shilem/projectmem/main/brand/dashboard-showoff-universe.png" alt="Showoff — your project as a rotating galaxy, every star a real event" width="800" />
   <br /><em>Showoff · Universe — every bright star is a real event from this project's memory</em>
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/riponcm/projectmem/main/brand/dashboard-projectmap-flow.png" alt="Flow — layered project map from project to memory" width="800" />
+  <img src="https://raw.githubusercontent.com/Shilem/projectmem/main/brand/dashboard-projectmap-flow.png" alt="Flow — layered project map from project to memory" width="800" />
   <br /><em>Project Map · Flow — what happened, file by file, flowing into append-only memory</em>
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/riponcm/projectmem/main/brand/dashboard-timeline-spine.png" alt="Time Spine — problems branch left, knowledge branches right" width="800" />
+  <img src="https://raw.githubusercontent.com/Shilem/projectmem/main/brand/dashboard-timeline-spine.png" alt="Time Spine — problems branch left, knowledge branches right" width="800" />
   <br /><em>Timeline · Time Spine — problems on the left, knowledge on the right, real time down the middle</em>
 </p>
 
@@ -192,7 +181,8 @@ Your project's memory is also something you can *watch* — and share.
 
 - **Import your existing memory** — `pjm import` *(planned for 0.2.1)* will migrate history from **mem0**, **agentmemory**, **Letta**, and Claude session logs into projectmem. It maps only to the core event vocabulary — issues, attempts, fixes, decisions, notes — so signal comes in and another tool's clutter stays out. Your judgment history moves with you.
 
-Want a source supported? [Open an issue](https://github.com/riponcm/projectmem/issues) and tell us what you're migrating from.
+For fork-specific issues or feature requests, use
+[Shilem/projectmem issues](https://github.com/Shilem/projectmem/issues).
 
 ## How AI Reads Your Memory (Token Efficiency)
 
@@ -485,7 +475,7 @@ By default, `projectmem` commits the **distilled** files (`summary.md`, `PROJECT
 
 **Want total privacy?** Add a single line `.projectmem/` to your `.gitignore`. Nothing leaves your machine.
 
-Full security policy and threat model: [SECURITY.md](SECURITY.md) · [Privacy & Security guide](https://projectmem.dev/guide#privacy-security)
+Read [SECURITY.md](SECURITY.md) for this repository's security policy.
 
 ## Design Principles
 
@@ -533,22 +523,8 @@ MIT — free for personal, commercial, and enterprise use forever.
 
 ---
 
-## Help Us Reach More Developers
+## Contributing
 
-**We don't need money. We need you.**
-
-`projectmem` is built by one developer for the open-source community. Every star, every share, and every contribution helps the project survive and grow.
-
-- **[Star the repo](https://github.com/riponcm/projectmem)** — takes one click, helps massively with discovery
-- **Share on X / LinkedIn** — tell other devs they don't have to keep paying AI to relearn their codebase
-- **[Open an issue](https://github.com/riponcm/projectmem/issues)** — bug, feature request, or just feedback
-- **[Contribute code](https://github.com/riponcm/projectmem/blob/main/CONTRIBUTING.md)** — PRs welcome, see contributing guide
-- **Using `projectmem` at work or in a commercial product?** Reach out to [support@projectmem.dev](mailto:support@projectmem.dev) so we know who's shipping with us. It's free — we just love hearing about it.
-
-*Stars and shares matter more than money — but if you really want to:* [sponsor on GitHub](https://github.com/sponsors/riponcm) →
-
----
-
-<div align="center">
-  <sub>Built with care by the open-source community. Every contribution, no matter how small, makes a difference.</sub>
-</div>
+Open an issue or submit a pull request at
+[Shilem/projectmem](https://github.com/Shilem/projectmem). This fork retains
+the MIT license and the upstream research citation above.
