@@ -1,6 +1,6 @@
 """Tests for the plan.md intent-file feature."""
-from projectmem.storage import initialize, plan_path
 from projectmem.commands import plan as plan_command
+from projectmem.storage import initialize, plan_path
 
 
 def test_init_creates_plan_md(tmp_path):

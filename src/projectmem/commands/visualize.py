@@ -8,11 +8,10 @@ from typing import Any
 
 import typer
 
-from projectmem.models import Event, normalize_timestamp
-from projectmem.storage import read_events, require_mem_dir, project_map_path
-from projectmem.commands.stats import calculate_savings
 from projectmem.commands.score import calculate_score
-
+from projectmem.commands.stats import calculate_savings
+from projectmem.models import Event, normalize_timestamp
+from projectmem.storage import project_map_path, read_events, require_mem_dir
 
 DENSE_FILE_EVENT_THRESHOLD = 10
 FAILURE_IMPORTANCE_WEIGHT = 3

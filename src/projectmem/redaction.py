@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Iterable
+from collections.abc import Iterable
 
 # Each pattern is intentionally narrow — anchored to a recognisable prefix
 # or structural shape with a minimum length. False positives are worse than

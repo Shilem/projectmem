@@ -10,8 +10,8 @@ import shutil
 import pytest
 import typer
 
-from projectmem.storage import initialize, register_project, registered_projects
 from projectmem.commands import dashboard as dashboard_command
+from projectmem.storage import initialize, register_project, registered_projects
 
 
 def _resolved(projects):
@@ -31,7 +31,7 @@ def _make(root, name, events):
 
 def _data(index_path):
     html = index_path.read_text(encoding="utf-8")
-    return json.loads(re.search(r"var DATA=(\{.*?\});", html, re.S).group(1))
+    return json.loads(re.search(r"var DATA=(\{.*?\});", html, re.DOTALL).group(1))
 
 
 ISSUE = {"id": "i1", "type": "issue", "summary": "bug",
@@ -121,7 +121,7 @@ def test_dashboard_never_writes_to_the_projects(tmp_path):
 # ── serve (live) vs static (snapshot) mode ──────────────────────────────
 
 def _data_from_html(html):
-    return json.loads(re.search(r"var DATA=(\{.*?\});", html, re.S).group(1))
+    return json.loads(re.search(r"var DATA=(\{.*?\});", html, re.DOTALL).group(1))
 
 
 def test_static_mode_marks_the_page_as_a_snapshot(tmp_path):

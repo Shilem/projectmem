@@ -355,7 +355,7 @@ def _parse_go_mod(path: Path) -> dict[str, Any]:
         for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line and not line.startswith("module") and not line.startswith("go "):
-                if line.startswith("require") or line.startswith(")"):
+                if line.startswith(("require", ")")):
                     continue
                 parts = line.split()
                 if parts:
@@ -499,10 +499,11 @@ def prune_entries(
                     entry_ts = 0
 
                 # Remove if old AND (no confidence filter or matches confidence)
-                if entry_ts < cutoff:
-                    if confidence is None or e.get("confidence") == confidence:
-                        removed += 1
-                        continue
+                if entry_ts < cutoff and (
+                    confidence is None or e.get("confidence") == confidence
+                ):
+                    removed += 1
+                    continue
                 filtered.append(e)
 
             if len(filtered) < original_len:

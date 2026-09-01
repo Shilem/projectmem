@@ -11,14 +11,13 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import typer
 
-from projectmem.storage import read_events, require_mem_dir
-
+from projectmem.storage import require_mem_dir
 
 # ── Weights for time/token estimation ──
 HOURS_PER_FAILED_APPROACH = 0.5    # 30 min saved per documented dead-end
@@ -206,14 +205,14 @@ def format_terminal(result: dict[str, Any]) -> str:
 
     bar = "=" * 44
     lines = [
-        f"",
+        "",
         f"  {dim}{bar}{reset}",
         f"  {bold}  projectmem Prevention Score{reset}",
         f"  {dim}{bar}{reset}",
-        f"",
+        "",
         f"      {grade_color}{'=' * 8} {g} {'=' * 8}{reset}",
         f"       {grade_color}Score: {s}/100{reset}",
-        f"",
+        "",
         f"  {dim}{'─' * 44}{reset}",
         f"  {bold}Knowledge Captured{reset}",
         f"  {dim}{'─' * 44}{reset}",
@@ -223,14 +222,14 @@ def format_terminal(result: dict[str, Any]) -> str:
         f"    Notes recorded:                {bold}{c['notes_count']}{reset}",
         f"    Files with known gotchas:      {bold}{c['files_with_gotchas']}{reset}",
         f"    High-churn files flagged:      {bold}{c['high_churn_files']}{reset}",
-        f"",
+        "",
         f"  {dim}{'─' * 44}{reset}",
         f"  {bold}Estimated Value{reset}",
         f"  {dim}{'─' * 44}{reset}",
         f"    Debugging hours saved:       {bold}~{v['debugging_hours_saved']:.1f}h{reset}",
         f"    Tokens saved:                {bold}{v['tokens_saved']:,}{reset}",
         f"    Estimated USD saved:         {bold}${v['usd_saved']:.2f}{reset}",
-        f"",
+        "",
         f"  {dim}{'─' * 44}{reset}",
         f"  {bold}Capture Stats{reset}",
         f"  {dim}{'─' * 44}{reset}",
@@ -238,7 +237,7 @@ def format_terminal(result: dict[str, Any]) -> str:
         f"    Manual:                      {bold}{cap['manual']}{reset}",
         f"    Auto-captured:               {bold}{cap['auto_captured']}{reset}",
         f"    Auto-capture rate:           {bold}{cap['auto_rate']}%{reset}",
-        f"",
+        "",
         f"  {dim}{'─' * 44}{reset}",
         f"  {bold}Score Breakdown (20 pts each){reset}",
         f"  {dim}{'─' * 44}{reset}",
@@ -248,7 +247,7 @@ def format_terminal(result: dict[str, Any]) -> str:
         f"    File coverage:       {_bar(bd['file_coverage'], 20)} {bd['file_coverage']}/20",
         f"    General coverage:    {_bar(bd['general_coverage'], 20)} {bd['general_coverage']}/20",
         f"  {dim}{bar}{reset}",
-        f"",
+        "",
     ]
     return "\n".join(lines)
 
@@ -329,7 +328,7 @@ def _format_verbose_breakdown(
     here lets a user audit *why* the score is what it is — which exact
     events contributed to each component.
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
 
     bold = "\033[1m"
     dim = "\033[2m"

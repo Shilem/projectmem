@@ -417,8 +417,8 @@ def _populate_project_map_from_stack(root: Path) -> None:
     lines: list[str] = [
         f"# Project Map - {project_name}",
         "",
-        "Status: auto-detected from project manifests "
-        "(an AI session may refine this).",
+        ("Status: auto-detected from project manifests "
+        "(an AI session may refine this)."),
         "",
     ]
     if description:

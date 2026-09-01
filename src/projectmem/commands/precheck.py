@@ -20,7 +20,7 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +28,6 @@ import typer
 
 from projectmem.models import Event
 from projectmem.storage import MEM_DIR, read_events, require_mem_dir
-
 
 # ── Thresholds ──
 HIGH_CHURN_THRESHOLD = 4         # changes in CHURN_WINDOW_COMMITS to trigger

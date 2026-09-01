@@ -1,6 +1,6 @@
 """Tests for the code-structure extractor (structure.py)."""
-from projectmem.structure import build_structure, write_structure
 from projectmem.storage import initialize
+from projectmem.structure import build_structure, write_structure
 
 
 def _make_project(root):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import re
 import stat
@@ -15,12 +15,12 @@ from projectmem.storage import (
     ProjectMemError,
     events_metadata,
     events_state_matches,
-    read_events_from_offset,
-    read_events_state,
     issues_dir,
     project_map_path,
     project_transaction,
     read_events,
+    read_events_from_offset,
+    read_events_state,
     summary_index_path,
     summary_path,
     write_events_state,
@@ -188,7 +188,7 @@ def _apply_records(
     ) or not isinstance(issues, dict) or not isinstance(metadata, dict):
         raise ValueError("Invalid summary projection containers")
     if not isinstance(event_chain, str):
-        raise ValueError("Invalid summary projection event chain")
+        raise TypeError("Invalid summary projection event chain")
 
     affected: set[str] = set()
     for event in events:

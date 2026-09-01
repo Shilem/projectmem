@@ -11,7 +11,6 @@ regressions are loud.
 """
 from __future__ import annotations
 
-import io
 from pathlib import Path
 
 import pytest
@@ -24,7 +23,6 @@ from projectmem.commands.init import (
     _print_mcp_config,
 )
 from projectmem.storage import initialize
-
 
 # ── helpers ─────────────────────────────────────────────────────────────
 
@@ -114,7 +112,7 @@ def test_stack_detect_handles_corrupt_manifest(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     (repo / "package.json").write_text("not valid {{{", encoding="utf-8")
     pmap = repo / ".projectmem" / "PROJECT_MAP.md"
-    before = pmap.read_text(encoding="utf-8")
+    pmap.read_text(encoding="utf-8")
     # Should not raise.
     _populate_project_map_from_stack(repo)
     # With no other manifest signal, content stays as placeholder.

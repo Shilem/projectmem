@@ -95,6 +95,7 @@ def _require_launchable_bash() -> str:
             text=True,
             timeout=10,
             stdin=subprocess.DEVNULL,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         pytest.skip(f"bash is not launchable: {exc}")
@@ -150,6 +151,7 @@ def test_hook_runs_under_stripped_path(tmp_path: Path, fake_pjm: Path) -> None:
         text=True,
         timeout=10,
         stdin=subprocess.DEVNULL,
+        check=False,
     )
     log_path = fake_pjm.parent.parent / "pjm.log"
     if result.returncode != 0:

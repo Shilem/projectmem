@@ -21,16 +21,13 @@ credentials to any scanner.
 """
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from projectmem.redaction import (
     REDACTABLE_FIELDS,
-    redact,
     is_redaction_enabled,
+    redact,
 )
-
 
 # ── fixture helpers (low-entropy, scanner-safe constructions) ───────────
 #

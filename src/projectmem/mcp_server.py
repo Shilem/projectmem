@@ -34,8 +34,9 @@ import io
 import os
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, Callable, Optional
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
@@ -425,7 +426,8 @@ def search_events(
     of requesting generic context.
 
     Read-only. Empty result returns a friendly message, not an error."""
-    from projectmem.search_index import SearchIndexError, search_events as search_index_events
+    from projectmem.search_index import SearchIndexError
+    from projectmem.search_index import search_events as search_index_events
 
     try:
         matches = search_index_events(query, limit=limit, root=_PROJECT_ROOT)
@@ -485,14 +487,14 @@ def get_score() -> str:
 @mcp.tool()
 @safe_tool
 def get_context(
-    tokens: Annotated[Optional[int], Field(
+    tokens: Annotated[int | None, Field(
         description="Optional target token budget for the returned markdown. "
                     "When omitted, uses context_token_budget from the "
                     "project's .projectmem/config.toml or the 2000-token "
                     "default. The generated output is capped at this budget.",
         ge=100, le=20000,
     )] = None,
-    focus: Annotated[Optional[str], Field(
+    focus: Annotated[str | None, Field(
         description="Optional path prefix or keyword to bias selection "
                     "toward (e.g., 'src/auth/'). When omitted, the "
                     "context is project-wide."
@@ -524,7 +526,7 @@ def get_context(
 @mcp.tool()
 @safe_tool
 def get_global_gotchas(
-    library: Annotated[Optional[str], Field(
+    library: Annotated[str | None, Field(
         description="Optional library name to filter by (case-insensitive "
                     "substring match — 'react' also matches "
                     "'react-router'). When omitted, returns all gotchas "
@@ -570,7 +572,7 @@ def log_issue(
                     "behavior (~140 chars recommended). Becomes the "
                     "issue title and is matched by search_events."
     )],
-    location: Annotated[Optional[str], Field(
+    location: Annotated[str | None, Field(
         description="Optional file path or component where the issue "
                     "manifests (e.g., 'src/auth.py' or "
                     "'login/double-submit'). Used by precheck_file to "
@@ -605,11 +607,11 @@ def record_attempt(
                     "uncertain.",
         pattern="^(worked|failed|partial)$",
     )] = "failed",
-    location: Annotated[Optional[str], Field(
+    location: Annotated[str | None, Field(
         description="Optional file path or component touched by this "
                     "attempt."
     )] = None,
-    issue_id: Annotated[Optional[str], Field(
+    issue_id: Annotated[str | None, Field(
         description="Optional zero-padded issue ID (e.g., '0042') to "
                     "attach this attempt to. When omitted, attaches to "
                     "the active issue; if no active issue exists, an "
@@ -652,13 +654,13 @@ def record_fix(
         ),
     ],
     location: Annotated[
-        Optional[str],
+        str | None,
         Field(
             description="Optional file path or component where the fix was applied."
         ),
     ] = None,
     issue_id: Annotated[
-        Optional[str],
+        str | None,
         Field(
             description=(
                 "Optional zero-padded issue ID (e.g., '0042') to close. "
@@ -691,13 +693,13 @@ def add_decision(
                     "password hashing'). Becomes part of the project's "
                     "permanent record — write it for a future contributor."
     )],
-    location: Annotated[Optional[str], Field(
+    location: Annotated[str | None, Field(
         description="Optional file path or scope where the decision "
                     "applies (e.g., 'src/auth/' for a module-level "
                     "choice). Helps precheck_file cite the decision "
                     "when the file is later touched."
     )] = None,
-    supersedes: Annotated[Optional[str], Field(
+    supersedes: Annotated[str | None, Field(
         description="Optional event id (evt_...) of a prior decision this "
                     "one retires. The old event stays in the log tagged "
                     "(superseded); only the new decision appears in "
@@ -730,7 +732,7 @@ def add_note(
                     "e.g., 'gotcha: bcrypt v4 silently truncates "
                     "passwords longer than 72 bytes'."
     )],
-    location: Annotated[Optional[str], Field(
+    location: Annotated[str | None, Field(
         description="Optional file path or library this note applies to "
                     "(e.g., 'bcrypt' for a library-specific gotcha)."
     )] = None,

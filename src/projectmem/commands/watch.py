@@ -17,21 +17,17 @@ import signal
 import sys
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Deque
 
 import typer
 
 from projectmem.models import Event
 from projectmem.storage import (
-    MEM_DIR,
     append_event,
     mem_path,
     require_mem_dir,
 )
 from projectmem.summary import regenerate_summary
-
 
 # ── Tunables (defaults — overridable via .projectmem/config.toml later) ──
 CHURN_THRESHOLD = 4              # edits before logging churn
@@ -204,10 +200,10 @@ def _run_as_daemon(root: Path | None = None) -> None:
     root_path = root or Path.cwd()
     log_file = _log_path(root_path)
     try:
-        log_fd = open(log_file, "a", encoding="utf-8")
-        os.dup2(log_fd.fileno(), sys.stdout.fileno())
-        os.dup2(log_fd.fileno(), sys.stderr.fileno())
-        sys.stdin = open(os.devnull, "r")
+        with open(log_file, "a", encoding="utf-8") as log_fd, open(os.devnull, "r") as devnull:
+            os.dup2(log_fd.fileno(), sys.stdout.fileno())
+            os.dup2(log_fd.fileno(), sys.stderr.fileno())
+            sys.stdin = os.fdopen(os.dup(devnull.fileno()), "r")
     except OSError:
         pass
 
@@ -235,14 +231,14 @@ def _write_pid(pid: int, root: Path | None = None) -> None:
 
 def _watch_loop(root: Path | None, verbose: bool = False) -> None:
     """Core file-watching loop using watchdog."""
-    from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
 
     root_path = root or Path.cwd()
     gitignore = _read_gitignore(root_path)
 
     # Per-file edit history (timestamps within the rolling window)
-    edits: dict[str, Deque[float]] = defaultdict(lambda: deque(maxlen=50))
+    edits: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=50))
     # Last-debounce timestamp per file
     last_seen: dict[str, float] = {}
     # Cooldown so we don't re-log the same file every minute
@@ -417,5 +413,5 @@ def _show_status(root: Path | None = None) -> None:
         f"\033[32m●\033[0m \033[32mrunning\033[0m · PID {pid}"
         + (f" · uptime {uptime_str}" if uptime_str else "")
     )
-    typer.echo(f"  Logs: .projectmem/watch.log")
-    typer.echo(f"  Stop: pjm watch --stop")
+    typer.echo("  Logs: .projectmem/watch.log")
+    typer.echo("  Stop: pjm watch --stop")

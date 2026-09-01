@@ -8,9 +8,6 @@ from pathlib import Path
 
 import typer
 
-from projectmem.storage import MEM_DIR
-
-
 # Marker used to identify projectmem's section in git hooks
 HOOK_MARKER_START = "# >>> projectmem auto-capture >>>"
 HOOK_MARKER_END = "# <<< projectmem auto-capture <<<"

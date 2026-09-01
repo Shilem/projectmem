@@ -9,17 +9,19 @@ from projectmem.commands import auto_capture as auto_capture_command
 from projectmem.commands import backfill as backfill_command
 from projectmem.commands import brief as brief_command
 from projectmem.commands import context as context_command
+from projectmem.commands import dashboard as dashboard_command
 from projectmem.commands import decision as decision_command
 from projectmem.commands import doctor as doctor_command
 from projectmem.commands import export as export_command
-from projectmem.commands import global_cmd as global_command
 from projectmem.commands import fix as fix_command
+from projectmem.commands import global_cmd as global_command
 from projectmem.commands import hooks as hooks_command
 from projectmem.commands import init as init_command
 from projectmem.commands import instructions as instructions_command
 from projectmem.commands import log as log_command
 from projectmem.commands import map as map_command
 from projectmem.commands import note as note_command
+from projectmem.commands import plan as plan_command
 from projectmem.commands import precheck as precheck_command
 from projectmem.commands import regenerate as regenerate_command
 from projectmem.commands import score as score_command
@@ -27,8 +29,6 @@ from projectmem.commands import search as search_command
 from projectmem.commands import show as show_command
 from projectmem.commands import stats as stats_command
 from projectmem.commands import visualize as visualize_command
-from projectmem.commands import dashboard as dashboard_command
-from projectmem.commands import plan as plan_command
 from projectmem.commands import watch as watch_command
 from projectmem.commands import wrap as wrap_command
 from projectmem.storage import ProjectMemError

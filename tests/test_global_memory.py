@@ -70,7 +70,7 @@ def test_opted_out_project_does_not_auto_promote_or_inherit(
     tmp_path: Path, monkeypatch
 ) -> None:
     global_root = tmp_path / "global"
-    import projectmem.global_memory as global_memory
+    from projectmem import global_memory
 
     monkeypatch.setattr(global_memory, "GLOBAL_DIR", global_root)
     project = tmp_path / "project"
@@ -102,7 +102,7 @@ def test_default_project_still_auto_promotes_lessons(
     tmp_path: Path, monkeypatch
 ) -> None:
     global_root = tmp_path / "global"
-    import projectmem.global_memory as global_memory
+    from projectmem import global_memory
 
     monkeypatch.setattr(global_memory, "GLOBAL_DIR", global_root)
     project = tmp_path / "project"

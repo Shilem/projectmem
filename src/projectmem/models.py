@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-
 VALID_EVENT_TYPES = {
     "issue",
     "hypothesis",
@@ -106,7 +105,7 @@ class Event:
         return {key: value for key, value in data.items() if value not in (None, [], False)}
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Event":
+    def from_dict(cls, data: dict[str, Any]) -> Event:
         return cls(
             id=data.get("id") or f"evt_{uuid4().hex[:20]}",
             timestamp=normalize_timestamp(data.get("timestamp")) if data.get("timestamp") else utc_now_iso(),
@@ -127,7 +126,7 @@ class Event:
         )
 
 
-def superseded_ids(events: list["Event"]) -> set[str]:
+def superseded_ids(events: list[Event]) -> set[str]:
     """IDs of events retired by a later event's `supersedes` pointer.
 
     Computed at read time so the log stays append-only — no event line is
@@ -136,7 +135,7 @@ def superseded_ids(events: list["Event"]) -> set[str]:
     return {e.supersedes for e in events if e.supersedes}
 
 
-def resolve_event_ref(events: list["Event"], ref: str) -> "Event":
+def resolve_event_ref(events: list[Event], ref: str) -> Event:
     """Resolve a user-supplied event reference to a single event.
 
     Accepts a full event id (``evt_ab12...``) or any unique prefix of the

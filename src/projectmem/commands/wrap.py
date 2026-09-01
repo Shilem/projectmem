@@ -24,7 +24,6 @@ import typer
 from projectmem.commands.context import generate_context, resolve_token_budget
 from projectmem.storage import read_events, require_mem_dir
 
-
 # ── Agent configurations ──
 AGENTS = {
     "claude": {
@@ -224,7 +223,7 @@ def _inject_message_prefix(
         f"({tokens_used} tokens)"
     )
     typer.echo(
-        f"  Tip: Use with --message flag or paste at the start of your session."
+        "  Tip: Use with --message flag or paste at the start of your session."
     )
 
 
@@ -257,8 +256,8 @@ def _inject_clipboard(context_md: str, tokens_used: int) -> None:
         )
     except (OSError, subprocess.TimeoutExpired):
         typer.echo(
-            f"\033[33m[projectmem]\033[0m Clipboard not available. "
-            f"Context saved to .projectmem/context_inject.md"
+            "\033[33m[projectmem]\033[0m Clipboard not available. "
+            "Context saved to .projectmem/context_inject.md"
         )
         context_file = Path.cwd() / ".projectmem" / "context_inject.md"
         context_file.write_text(context_md, encoding="utf-8")

@@ -16,7 +16,6 @@ from projectmem.cli import app
 from projectmem.models import Event, resolve_event_ref, superseded_ids
 from projectmem.storage import append_event, read_events
 
-
 runner = CliRunner()
 
 

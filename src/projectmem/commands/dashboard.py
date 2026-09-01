@@ -19,10 +19,10 @@ from pathlib import Path
 
 import typer
 
+from projectmem.commands import visualize as visualize_command
+from projectmem.commands.score import calculate_score
 from projectmem.models import Event
 from projectmem.storage import read_events, registered_projects
-from projectmem.commands.score import calculate_score
-from projectmem.commands import visualize as visualize_command
 
 _MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]

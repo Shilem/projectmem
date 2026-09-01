@@ -23,7 +23,6 @@ import typer
 from projectmem.global_memory import (
     add_gotcha,
     add_pattern,
-    auto_promote_event,
     detect_stack,
     export_all,
     get_relevant_entries,
@@ -84,8 +83,6 @@ def _status() -> None:
     """Show global memory overview."""
     bold = "\033[1m"
     dim = "\033[2m"
-    cyan = "\033[36m"
-    green = "\033[32m"
     reset = "\033[0m"
 
     patterns = read_patterns()
@@ -117,7 +114,7 @@ def _status() -> None:
     typer.echo(f"  {bold}  projectmem Global Memory{reset}")
     typer.echo(f"  {dim}{bar}{reset}")
     typer.echo(f"  {dim}Location: {global_dir()}{reset}")
-    typer.echo(f"")
+    typer.echo("")
     typer.echo(f"    Patterns:           {bold}{len(patterns)}{reset}")
     typer.echo(f"    Library gotchas:     {bold}{len(gotchas)}{reset}")
     typer.echo(f"    Stack preferences:   {bold}{'yes' if prefs_exist else 'not set'}{reset}")

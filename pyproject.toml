@@ -70,3 +70,19 @@ pythonpath = ["src"]
 [tool.ruff]
 line-length = 88
 target-version = "py310"
+
+[tool.ruff.lint.per-file-ignores]
+# Typer declares CLI options as evaluated defaults. The remaining entries are
+# explicit best-effort/error-boundary handlers whose comments define the
+# fallback contract; linting every new file remains strict.
+"src/projectmem/cli.py" = ["B008"]
+"src/projectmem/commands/brief.py" = ["BLE001"]
+"src/projectmem/commands/dashboard.py" = ["BLE001", "S110"]
+"src/projectmem/commands/export.py" = ["BLE001", "S110"]
+"src/projectmem/commands/init.py" = ["BLE001", "S110"]
+"src/projectmem/commands/precheck.py" = ["BLE001", "S110"]
+"src/projectmem/commands/watch.py" = ["BLE001"]
+"src/projectmem/global_memory.py" = ["BLE001", "S110"]
+"src/projectmem/mcp_server.py" = ["BLE001"]
+"src/projectmem/storage.py" = ["BLE001", "S110"]
+"src/projectmem/summary.py" = ["BLE001"]

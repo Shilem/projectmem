@@ -8,6 +8,8 @@ import typer
 from projectmem.models import Event, superseded_ids
 from projectmem.search_index import (
     SearchIndexError,
+)
+from projectmem.search_index import (
     search_events as indexed_search_events,
 )
 from projectmem.storage import read_events

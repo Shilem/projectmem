@@ -203,9 +203,7 @@ def _is_backfill_event(event: Event) -> bool:
     notes = (event.notes or "").lower()
     if notes.startswith("auto-backfilled") or "auto-backfilled" in notes:
         return True
-    if event.files and len(event.files) > 5 and event.type == "note":
-        return True
-    return False
+    return bool(event.files and len(event.files) > 5 and event.type == "note")
 
 
 def _read_context_config(root: Path | None = None) -> dict[str, Any]:
@@ -267,7 +265,7 @@ def resolve_token_budget(
     if budget is None:
         budget = DEFAULT_TOKEN_BUDGET
     if not isinstance(budget, int) or isinstance(budget, bool):
-        raise ValueError("Context token budget must be an integer.")
+        raise TypeError("Context token budget must be an integer.")
     if not MIN_TOKEN_BUDGET <= budget <= MAX_TOKEN_BUDGET:
         raise ValueError(
             f"Context token budget must be between {MIN_TOKEN_BUDGET} and "
@@ -414,10 +412,9 @@ def _score_event(
         ts = now - timedelta(days=15)  # middle-of-range fallback
 
     # Skip events before cutoff
-    if ts < cutoff:
-        # Still include unresolved failures even if old
-        if not (event.type == "attempt" and event.outcome == "failed"):
-            return 0.0
+    # Still include unresolved failures even if old.
+    if ts < cutoff and not (event.type == "attempt" and event.outcome == "failed"):
+        return 0.0
 
     # Base score by type
     base = TYPE_BASE_SCORES.get(event.type, 1)
@@ -448,10 +445,9 @@ def _score_event(
                 file_relevance = 1.0
                 break
             # Same directory
-            if "/" in f and "/" in focus:
-                if f.rsplit("/", 1)[0] == focus.rstrip("/"):
-                    file_relevance = 0.7
-                    break
+            if "/" in f and "/" in focus and f.rsplit("/", 1)[0] == focus.rstrip("/"):
+                file_relevance = 0.7
+                break
 
     # Git status boost (files currently being worked on)
     if git_files:
@@ -601,9 +597,7 @@ def _build_arch_context(
     relevant: list[str] = []
 
     for line in lines:
-        if focus and focus.rstrip("/") in line:
-            relevant.append(line.strip())
-        elif line.startswith("- ") and ("`" in line or "/" in line):
+        if focus and focus.rstrip("/") in line or line.startswith("- ") and ("`" in line or "/" in line):
             relevant.append(line.strip())
 
     if not relevant:

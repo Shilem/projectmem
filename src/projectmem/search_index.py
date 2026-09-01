@@ -8,13 +8,13 @@ keeps the event write path independent from search implementation details.
 
 from __future__ import annotations
 
-from collections import deque
 import json
 import os
-from pathlib import Path
 import re
 import sqlite3
 import tempfile
+from collections import deque
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -27,7 +27,6 @@ from projectmem.storage import (
     read_events,
     require_mem_dir,
 )
-
 
 INDEX_FILE = "search.sqlite3"
 SCHEMA_VERSION = 3
