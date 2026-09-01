@@ -21,7 +21,7 @@ from pathlib import Path
 
 import typer
 
-from projectmem.commands.context import generate_context
+from projectmem.commands.context import generate_context, resolve_token_budget
 from projectmem.storage import read_events, require_mem_dir
 
 
@@ -58,7 +58,7 @@ CONTEXT_MARKER_END = "<!-- projectmem:context:end -->"
 
 def run(
     agent: str = "claude",
-    tokens: int = 2000,
+    tokens: int | None = None,
     focus: str | None = None,
     recent: str | None = None,
     preview: bool = False,
@@ -100,13 +100,16 @@ def run(
         else:
             recent_days = int(recent)
 
+    effective_tokens = resolve_token_budget(tokens, root_path, use_config=tokens is None)
+
     # Generate context
     result = generate_context(
         events,
-        token_budget=tokens,
+        token_budget=effective_tokens,
         focus=focus,
         recent_days=recent_days,
         root=root_path,
+        use_config=False,
     )
 
     context_md = result["markdown"]
@@ -114,7 +117,7 @@ def run(
     level = result["compression_level"]
 
     if preview:
-        _show_preview(context_md, tokens_used, tokens, level, config)
+        _show_preview(context_md, tokens_used, effective_tokens, level, config)
         return
 
     # Inject context based on agent type

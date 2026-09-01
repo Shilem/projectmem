@@ -2,24 +2,58 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
+import tempfile
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import BinaryIO
 
-from projectmem.models import Event
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised only on Windows
+    fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - exercised only on POSIX
+    msvcrt = None  # type: ignore[assignment]
+
+from projectmem import project_registry as _project_registry
+from projectmem.models import Event, resolve_event_ref, superseded_ids
 
 MEM_DIR = ".projectmem"
 SUMMARY_FILE = "summary.md"
 EVENTS_FILE = "events.jsonl"
+SUMMARY_INDEX_FILE = "summary.index.json"
+EVENTS_STATE_FILE = "events.state.json"
 CONFIG_FILE = "config.toml"
+GLOBAL_MEMORY_ENABLED_CONFIG = "global_memory_enabled"
 ISSUES_DIR = "issues"
 AI_INSTRUCTIONS_FILE = "AI_INSTRUCTIONS.md"
 PROJECT_MAP_FILE = "PROJECT_MAP.md"
 PLAN_FILE = "plan.md"
+TRANSACTION_LOCK_FILE = ".transaction.lock"
 
 
 class ProjectMemError(RuntimeError):
     pass
+
+
+class _TransactionLockState:
+    """Process-local state for a re-entrant project transaction lock."""
+
+    def __init__(self) -> None:
+        self.thread_lock = threading.RLock()
+        self.depth = 0
+        self.handle: BinaryIO | None = None
+
+
+_TRANSACTION_STATES: dict[Path, _TransactionLockState] = {}
+_TRANSACTION_STATES_GUARD = threading.Lock()
 
 
 def mem_path(root: Path | None = None) -> Path:
@@ -83,8 +117,106 @@ def require_mem_dir(root: Path | None = None) -> Path:
     )
 
 
+def _file_lock(handle: BinaryIO) -> None:
+    """Acquire an exclusive cross-process lock on ``handle``.
+
+    ``fcntl.flock`` is the native primitive on POSIX (the supported runtime
+    for the local-first CLI).  Keep a small ``msvcrt`` fallback so the same
+    package remains usable on Windows without adding a locking dependency.
+    """
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return
+    if msvcrt is None:  # pragma: no cover - defensive for unusual runtimes
+        raise ProjectMemError("Project transactions require a file-locking API.")
+
+    # msvcrt.locking works on a byte range starting at the current cursor.
+    handle.seek(0, os.SEEK_END)
+    if handle.tell() == 0:
+        handle.write(b"\0")
+        handle.flush()
+    handle.seek(0)
+    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+
+
+def _file_unlock(handle: BinaryIO) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    if msvcrt is not None:  # pragma: no cover - exercised only on Windows
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _transaction_state(lock_path: Path) -> _TransactionLockState:
+    with _TRANSACTION_STATES_GUARD:
+        state = _TRANSACTION_STATES.get(lock_path)
+        if state is None:
+            state = _TransactionLockState()
+            _TRANSACTION_STATES[lock_path] = state
+        return state
+
+
+@contextmanager
+def project_transaction(root: Path | None = None) -> Iterator[Path]:
+    """Serialize one project's event/marker/summary state.
+
+    The per-project lock is both thread-safe within this process and
+    cross-process via a lock file.  It is intentionally re-entrant so the
+    low-level ``append_event`` and marker helpers can enforce their own safety
+    when called outside a command transaction without deadlocking a command
+    that already owns the same project lock.
+
+    The yielded path is the canonical project root, allowing callers to pass
+    it explicitly to every read/write in the transaction even when the caller
+    started in a nested directory.
+    """
+    project_dir = require_mem_dir(root)
+    lock_path = (project_dir / TRANSACTION_LOCK_FILE).resolve()
+    state = _transaction_state(lock_path)
+
+    state.thread_lock.acquire()
+    entered = False
+    try:
+        if state.depth == 0:
+            handle = lock_path.open("a+b")
+            try:
+                _file_lock(handle)
+            except Exception:
+                handle.close()
+                raise
+            state.handle = handle
+        state.depth += 1
+        entered = True
+        yield lock_path.parent.parent
+    finally:
+        try:
+            if entered:
+                state.depth -= 1
+                if state.depth == 0:
+                    handle = state.handle
+                    state.handle = None
+                    if handle is not None:
+                        try:
+                            _file_unlock(handle)
+                        finally:
+                            handle.close()
+        finally:
+            state.thread_lock.release()
+
+
 def events_path(root: Path | None = None) -> Path:
     return require_mem_dir(root) / EVENTS_FILE
+
+
+def summary_index_path(root: Path | None = None) -> Path:
+    """Return the disposable summary projection path for ``root``."""
+    return require_mem_dir(root) / SUMMARY_INDEX_FILE
+
+
+def events_state_path(root: Path | None = None) -> Path:
+    """Return the append-state receipt used to detect out-of-band rewrites."""
+    return require_mem_dir(root) / EVENTS_STATE_FILE
 
 
 def summary_path(root: Path | None = None) -> Path:
@@ -107,7 +239,71 @@ def issues_dir(root: Path | None = None) -> Path:
     return require_mem_dir(root) / ISSUES_DIR
 
 
-def initialize(root: Path | None = None) -> Path:
+def _set_global_memory_enabled(root: Path, enabled: bool) -> None:
+    """Persist the per-project global-memory preference in ``config.toml``."""
+    config = mem_path(root) / CONFIG_FILE
+    try:
+        content = config.read_text(encoding="utf-8")
+    except OSError:
+        return
+
+    value = "true" if enabled else "false"
+    pattern = re.compile(
+        rf"^(\s*{re.escape(GLOBAL_MEMORY_ENABLED_CONFIG)}\s*=\s*)"
+        rf"(?:true|false)(\s*(?:#.*)?)$",
+        re.MULTILINE,
+    )
+    updated, count = pattern.subn(rf"\g<1>{value}\g<2>", content, count=1)
+    if count == 0:
+        suffix = "" if content.endswith("\n") else "\n"
+        updated = (
+            f"{content}{suffix}{GLOBAL_MEMORY_ENABLED_CONFIG} = {value}\n"
+        )
+    if updated != content:
+        config.write_text(updated, encoding="utf-8")
+
+
+def global_memory_enabled(root: Path | None = None) -> bool:
+    """Return whether automatic cross-project memory is enabled for a project.
+
+    The setting is deliberately opt-out: projects initialized before this
+    setting existed, and projects with malformed or missing configuration,
+    retain the historical auto-promotion behavior.  Only an explicit
+    ``global_memory_enabled = false`` disables global reads/writes.
+    """
+    try:
+        config = require_mem_dir(root) / CONFIG_FILE
+        content = config.read_text(encoding="utf-8")
+    except (OSError, ProjectMemError):
+        return True
+
+    for line in content.splitlines():
+        # This is intentionally a tiny TOML reader for one root-level boolean;
+        # the rest of config.toml is already treated as simple key/value data.
+        without_comment = line.split("#", 1)[0].strip()
+        if not without_comment or without_comment.startswith("["):
+            continue
+        key, separator, value = without_comment.partition("=")
+        if separator and key.strip() == GLOBAL_MEMORY_ENABLED_CONFIG:
+            return value.strip().lower() != "false"
+    return True
+
+
+def set_global_memory_enabled(root: Path, enabled: bool) -> None:
+    """Set the project-level global-memory preference.
+
+    This small public wrapper is useful to callers that already know the
+    desired preference; ``initialize`` uses it for the CLI's ``--no-global``
+    flag without changing the existing command signature.
+    """
+    _set_global_memory_enabled(root, enabled)
+
+
+def initialize(
+    root: Path | None = None,
+    *,
+    global_enabled: bool | None = None,
+) -> Path:
     root_path = root or Path.cwd()
     project_dir = mem_path(root_path)
     project_dir.mkdir(exist_ok=True)
@@ -117,9 +313,17 @@ def initialize(root: Path | None = None) -> Path:
     config = project_dir / CONFIG_FILE
     if not config.exists():
         config.write_text(
-            'summary_size_limit_kb = 20\nrecent_days = 30\nproject_description = ""\n',
+            'summary_size_limit_kb = 20\nrecent_days = 30\n'
+            'context_token_budget = 2000\nproject_description = ""\n',
             encoding="utf-8",
         )
+
+    # ``--no-global`` used to affect inheritance only.  Persist an explicit
+    # opt-out so later event writes cannot silently promote data.  A plain
+    # re-run of ``pjm init`` leaves an existing preference untouched; this is
+    # what makes the opt-out durable while preserving the historical default.
+    if global_enabled is not None:
+        _set_global_memory_enabled(root_path, global_enabled)
 
     summary = project_dir / SUMMARY_FILE
     if not summary.exists():
@@ -143,61 +347,44 @@ def initialize(root: Path | None = None) -> Path:
 
 
 def registry_path() -> Path:
-    """The opt-in cross-project registry used by `pjm dashboard`.
-
-    A plain JSON list of absolute project paths. Populated only by `pjm init`
-    (never by a filesystem crawl), so the global dashboard shows ONLY projects
-    you explicitly initialised. No data is copied here — just paths; the
-    dashboard reads each project's own `.projectmem/` at render time.
-
-    Location honours $PROJECTMEM_HOME (defaults to ~/.projectmem) so tests and
-    sandboxes can isolate it instead of writing to the real user registry.
-    """
-    home = os.environ.get("PROJECTMEM_HOME")
-    base = Path(home) if home else (Path.home() / ".projectmem")
-    return base / "projects.json"
+    """Compatibility wrapper for the machine-global registry path."""
+    return _project_registry.registry_path()
 
 
 def register_project(root: Path) -> None:
-    """Add a project's absolute path to the global registry (idempotent)."""
-    try:
-        target = str(root.resolve())
-    except OSError:
-        return
-    reg = registry_path()
-    reg.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        data = json.loads(reg.read_text(encoding="utf-8")) if reg.exists() else []
-    except (json.JSONDecodeError, OSError):
-        data = []
-    paths = [p for p in data if isinstance(p, str)]
-    if target not in paths:
-        paths.append(target)
-        reg.write_text(json.dumps(paths, indent=1) + "\n", encoding="utf-8")
+    """Add an initialized project to the registry (idempotent).
+
+    The historical helper returned ``None``; retain that return contract while
+    exposing the richer ``register_project_record`` API from this module.
+    """
+    _project_registry.register_project_record(root)
 
 
 def registered_projects() -> list[Path]:
-    """Registered projects that still exist and still have a `.projectmem/`.
+    """Compatibility reader returning live initialized roots only.
 
-    Stale entries (deleted repos, removed memory) are skipped, not pruned —
-    the registry stays append-only; the reader just filters.
+    The old dashboard deliberately filtered stale entries.  Keep that
+    behavior here; strict global-MCP callers must use ``resolve_project_root``
+    or ``registered_project_records`` so deleted/uninitialized entries and
+    registry corruption remain observable.
     """
-    reg = registry_path()
-    if not reg.exists():
-        return []
-    try:
-        data = json.loads(reg.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
+    records = _project_registry.load_registry()
     out: list[Path] = []
-    seen: set[str] = set()
-    for entry in data:
-        if not isinstance(entry, str) or entry in seen:
+    seen: set[Path] = set()
+    for record in records:
+        try:
+            root = _project_registry.canonicalize_project_root(
+                record.root, require_initialized=True
+            )
+        except (
+            _project_registry.ProjectDeletedError,
+            _project_registry.ProjectNotInitializedError,
+            _project_registry.ProjectPathChangedError,
+        ):
             continue
-        seen.add(entry)
-        path = Path(entry)
-        if (path / MEM_DIR).is_dir():
-            out.append(path)
+        if root not in seen:
+            seen.add(root)
+            out.append(root)
     return out
 
 
@@ -493,6 +680,14 @@ def ensure_gitignore_entry(root: Path) -> None:
     gitignore = root / ".gitignore"
     entries = [
         f"{MEM_DIR}/{EVENTS_FILE}",
+        f"{MEM_DIR}/{SUMMARY_INDEX_FILE}",
+        f"{MEM_DIR}/{EVENTS_STATE_FILE}",
+        f"{MEM_DIR}/search.sqlite3",
+        f"{MEM_DIR}/search.sqlite3-journal",
+        f"{MEM_DIR}/search.sqlite3-wal",
+        f"{MEM_DIR}/search.sqlite3-shm",
+        f"{MEM_DIR}/.search.sqlite3.*.tmp",
+        f"{MEM_DIR}/{TRANSACTION_LOCK_FILE}",
         f"{MEM_DIR}/watch.pid",
         f"{MEM_DIR}/watch.log",
         f"{MEM_DIR}/structure.json",
@@ -506,6 +701,117 @@ def ensure_gitignore_entry(root: Path) -> None:
     gitignore.write_text(existing + prefix + "\n".join(new_entries) + "\n", encoding="utf-8")
 
 
+def _append_event_line(path: Path, event: Event) -> None:
+    """Append one complete JSONL record with a single system-level write."""
+    payload = (json.dumps(event.to_dict(), sort_keys=True) + "\n").encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:  # pragma: no cover - guarded against broken filesystems
+                raise OSError("Could not append event record")
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Replace a text file atomically, cleaning up an interrupted temp write."""
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _events_metadata(path: Path) -> dict[str, int]:
+    """Return the cheap identity/length receipt for an events log."""
+    stat_result = path.stat()
+    return {
+        "device": int(stat_result.st_dev),
+        "inode": int(stat_result.st_ino),
+        "size": int(stat_result.st_size),
+        "mtime_ns": int(stat_result.st_mtime_ns),
+    }
+
+
+def events_metadata(root: Path | None = None) -> dict[str, int]:
+    """Return identity/length metadata for a project's events log."""
+    return _events_metadata(events_path(root))
+
+
+def events_state_matches(
+    state: dict[str, object] | None, metadata: dict[str, int]
+) -> bool:
+    """Check whether an append receipt describes the current events file.
+
+    The receipt is maintained by ``append_event`` while holding the project
+    transaction lock.  A missing/stale receipt means the file may have been
+    replaced out of band; consumers must then rebuild the projection.
+    """
+    if not isinstance(state, dict):
+        return False
+    for key in ("device", "inode", "size", "mtime_ns"):
+        if state.get(key) != metadata.get(key):
+            return False
+    return True
+
+
+def read_events_state(root: Path | None = None) -> dict[str, object] | None:
+    """Read the disposable append receipt, returning ``None`` if invalid."""
+    try:
+        path = events_state_path(root)
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ProjectMemError):
+        return None
+    if not isinstance(data, dict) or data.get("version") != 1:
+        return None
+    if not all(
+        isinstance(data.get(key), int)
+        for key in ("device", "inode", "size", "mtime_ns")
+    ):
+        return None
+    if not isinstance(data.get("rebuild_required", False), bool):
+        return None
+    return data
+
+
+def write_events_state(
+    root: Path | None = None, *, rebuild_required: bool = False
+) -> dict[str, object]:
+    """Record the current events file identity under the project lock.
+
+    This is a derived receipt, not another source of truth.  If it is lost or
+    stale, the summary generator deliberately falls back to parsing the full
+    append-only log.
+    """
+    project_root = root or Path.cwd()
+    path = events_path(project_root)
+    metadata = _events_metadata(path)
+    state: dict[str, object] = {
+        "version": 1,
+        **metadata,
+        "rebuild_required": bool(rebuild_required),
+    }
+    _atomic_write_text(
+        events_state_path(project_root),
+        json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n",
+    )
+    return state
+
+
 def read_events(root: Path | None = None) -> list[Event]:
     path = events_path(root)
     events: list[Event] = []
@@ -517,6 +823,116 @@ def read_events(root: Path | None = None) -> list[Event]:
         except (json.JSONDecodeError, KeyError, ValueError) as exc:
             raise ProjectMemError(f"Invalid event at {path}:{line_number}: {exc}") from exc
     return events
+
+
+def read_events_from_offset(
+    root: Path | None, offset: int
+) -> tuple[list[Event], int]:
+    """Parse only complete JSONL records at or after ``offset``.
+
+    ``offset`` must be a byte boundary previously returned by this function or
+    by a completed full read.  A partial final line is rejected so an
+    interrupted append cannot be accepted as a valid incremental projection.
+    """
+    path = events_path(root)
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+        raise ProjectMemError(f"Invalid events projection offset: {offset!r}")
+    try:
+        file_size = path.stat().st_size
+    except OSError as exc:
+        raise ProjectMemError(f"Could not stat events file {path}: {exc}") from exc
+    if offset > file_size:
+        raise ProjectMemError(
+            f"Events projection offset {offset} exceeds log size {file_size}."
+        )
+
+    with path.open("rb") as handle:
+        handle.seek(offset)
+        raw = handle.read()
+    end_offset = offset + len(raw)
+    if not raw:
+        return [], end_offset
+    if not raw.endswith(b"\n"):
+        raise ProjectMemError(f"Incomplete event record at end of {path}.")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ProjectMemError(f"Invalid UTF-8 in events suffix {path}: {exc}") from exc
+
+    events: list[Event] = []
+    for line_number, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            events.append(Event.from_dict(json.loads(line)))
+        except (json.JSONDecodeError, KeyError, ValueError) as exc:
+            raise ProjectMemError(
+                f"Invalid event in suffix {path} (line {line_number}): {exc}"
+            ) from exc
+    return events, end_offset
+
+
+def normalize_issue_id(issue_id: str | None) -> str | None:
+    """Normalize numeric issue references while preserving legacy IDs."""
+    if issue_id is None:
+        return None
+    cleaned = issue_id.strip().lstrip("#")
+    if not cleaned:
+        return None
+    return cleaned.zfill(4) if cleaned.isdigit() else cleaned
+
+
+def issue_exists(events: list[Event], issue_id: str | None) -> bool:
+    """Return whether an issue event exists for ``issue_id``."""
+    normalized = normalize_issue_id(issue_id)
+    if normalized is None:
+        return False
+    return any(
+        event.type == "issue"
+        and normalize_issue_id(event.issue_id) == normalized
+        for event in events
+    )
+
+
+def closed_issue_ids(events: list[Event]) -> set[str]:
+    """Return issue IDs that already have a fix event."""
+    return {
+        normalized
+        for event in events
+        if event.type == "fix"
+        and (normalized := normalize_issue_id(event.issue_id)) is not None
+        and normalized
+    }
+
+
+def validate_issue_reference(
+    events: list[Event], issue_id: str | None, *, require_open: bool = True
+) -> str:
+    """Validate and canonicalize an issue reference before appending an event."""
+    normalized = normalize_issue_id(issue_id)
+    if normalized is None:
+        raise ProjectMemError("Issue ID cannot be empty.")
+    if not issue_exists(events, normalized):
+        raise ProjectMemError(
+            f"Issue #{normalized} was not found. "
+            "Run `pjm search <query>` or `pjm brief` to find the issue ID."
+        )
+    if require_open and normalized in closed_issue_ids(events):
+        raise ProjectMemError(f"Issue #{normalized} is already closed.")
+    return normalized
+
+
+def validate_supersede_target(events: list[Event], reference: str) -> Event:
+    """Resolve a supersede reference and enforce decision-only transitions."""
+    target = resolve_event_ref(events, reference)
+    if target.type != "decision":
+        raise ValueError(
+            f"Event {target.id} is a {target.type}; only decision events "
+            "can be superseded."
+        )
+    if target.id in superseded_ids(events):
+        raise ValueError(f"Decision {target.id} is already superseded.")
+    return target
 
 
 def append_event(event: Event, root: Path | None = None) -> Event:
@@ -541,8 +957,59 @@ def append_event(event: Event, root: Path | None = None) -> Event:
         pass
 
     path = events_path(root)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event.to_dict(), sort_keys=True) + "\n")
+    project_root = path.parent.parent
+
+    # Validate stateful references at the append boundary too.  Command
+    # handlers perform the same checks for friendly UX, but auto-capture and
+    # direct library callers also need to be unable to create dangling or
+    # duplicate state transitions.  Keep the validation and append under the
+    # same project lock so two callers cannot both validate against the same
+    # stale snapshot.
+    with project_transaction(project_root):
+        # Keep a tiny writer-owned receipt alongside the append-only log.  It
+        # lets summary regeneration distinguish a normal append from an
+        # out-of-band truncate/replacement without hashing or reparsing the
+        # historical JSONL prefix on every write.
+        try:
+            before_metadata = _events_metadata(path)
+            before_state = read_events_state(project_root)
+            rebuild_required = not events_state_matches(
+                before_state, before_metadata
+            ) or bool(
+                before_state and before_state.get("rebuild_required", False)
+            )
+        except OSError:
+            before_state = None
+            rebuild_required = True
+
+        existing_events: list[Event] | None = None
+
+        def loaded_events() -> list[Event]:
+            nonlocal existing_events
+            if existing_events is None:
+                existing_events = read_events(project_root)
+            return existing_events
+
+        if event.issue_id:
+            normalized_issue_id = normalize_issue_id(event.issue_id)
+            if normalized_issue_id is not None:
+                event.issue_id = normalized_issue_id
+
+        if event.type in ("attempt", "fix") and event.issue_id:
+            validate_issue_reference(loaded_events(), event.issue_id, require_open=True)
+
+        if event.supersedes:
+            if event.type != "decision":
+                raise ValueError("Only decision events can supersede another event.")
+            validate_supersede_target(loaded_events(), event.supersedes)
+
+        _append_event_line(path, event)
+        try:
+            write_events_state(project_root, rebuild_required=rebuild_required)
+        except OSError:
+            # The event itself is authoritative.  A missing receipt is safe:
+            # the next summary regeneration will perform a full rebuild.
+            pass
 
     # Auto-promote library-mentioning attempts/decisions/notes to the
     # machine-wide global store so projects with overlapping stacks inherit
@@ -551,19 +1018,29 @@ def append_event(event: Event, root: Path | None = None) -> Event:
     # in plain English won't surface a fake Next.js gotcha to other projects.
     # Failures here are non-fatal — the local event is already persisted;
     # only the optional cross-project propagation is at risk.
-    if event.type in ("attempt", "decision", "note") and event.summary:
+    if (
+        event.type in ("attempt", "decision", "note")
+        and event.summary
+        and global_memory_enabled(project_root)
+    ):
         try:
             from projectmem.global_memory import auto_promote_event, detect_stack
 
-            project_root = root or Path.cwd()
-            stack = detect_stack(project_root)
-            auto_promote_event(
-                event_summary=event.summary,
-                event_type=event.type,
-                project_name=project_root.name,
-                project_libraries=stack.get("libraries", []) + stack.get("tags", []),
-                outcome=getattr(event, "outcome", None),
-            )
+            # The global-memory module predates multi-project concurrency and
+            # intentionally has no project registry dependency.  Reuse the
+            # independent machine-global lock here so stack cache and gotcha
+            # JSONL writes cannot interleave with another project's promotion.
+            with _project_registry.global_registry_lock():
+                stack = detect_stack(project_root)
+                auto_promote_event(
+                    event_summary=event.summary,
+                    event_type=event.type,
+                    project_name=project_root.name,
+                    project_libraries=(
+                        stack.get("libraries", []) + stack.get("tags", [])
+                    ),
+                    outcome=getattr(event, "outcome", None),
+                )
         except Exception:
             # Auto-promote is a best-effort enrichment. Never let it break
             # the primary write path.
@@ -582,10 +1059,11 @@ def next_issue_id(events: list[Event]) -> str:
 
 
 def current_issue_id(events: list[Event]) -> str | None:
-    closed = {event.issue_id for event in events if event.type == "fix" and event.issue_id}
+    closed = closed_issue_ids(events)
     for event in reversed(events):
-        if event.type == "issue" and event.issue_id not in closed:
-            return event.issue_id
+        normalized = normalize_issue_id(event.issue_id)
+        if event.type == "issue" and normalized and normalized not in closed:
+            return normalized
     return None
 
 
@@ -599,7 +1077,10 @@ def current_issue_marker_path(root: Path | None = None) -> Path:
 def write_current_issue(issue_id: str, root: Path | None = None) -> None:
     """Persist the active issue ID. Cleared on `pjm fix`."""
     try:
-        current_issue_marker_path(root).write_text(issue_id, encoding="utf-8")
+        with project_transaction(root) as project_root:
+            _atomic_write_text(
+                current_issue_marker_path(project_root), issue_id
+            )
     except OSError:
         pass  # marker is advisory; don't fail the command
 
@@ -622,11 +1103,11 @@ def read_current_issue(root: Path | None = None) -> str | None:
 def clear_current_issue(root: Path | None = None) -> None:
     """Clear the active-issue marker. No-op if it does not exist."""
     try:
-        path = current_issue_marker_path(root)
+        with project_transaction(root) as project_root:
+            path = current_issue_marker_path(project_root)
+            path.unlink(missing_ok=True)
     except ProjectMemError:
         return
-    try:
-        path.unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -639,18 +1120,19 @@ def latest_open_issue_within(
     Used as a time-fenced fallback for `pjm attempt` when no current-issue
     marker exists — avoids silently attaching an attempt to a stale issue.
     """
-    from datetime import datetime, timezone, timedelta
-    closed = {e.issue_id for e in events if e.type == "fix" and e.issue_id}
+    from datetime import datetime, timedelta, timezone
+    closed = closed_issue_ids(events)
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     for event in reversed(events):
-        if event.type != "issue" or event.issue_id in closed:
+        normalized = normalize_issue_id(event.issue_id)
+        if event.type != "issue" or normalized is None or normalized in closed:
             continue
         try:
             ts = datetime.fromisoformat(event.timestamp.replace("Z", "+00:00"))
         except (ValueError, AttributeError):
             return None
         if ts >= cutoff:
-            return event.issue_id
+            return normalized
         return None  # most recent open is older than the window — no auto-attach
     return None
 

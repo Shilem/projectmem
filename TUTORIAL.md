@@ -27,8 +27,9 @@ time you almost repeat the same mistake.
 pip install projectmem
 ```
 
-Two console commands ship: `pjm` (the CLI) and `pjm-mcp` (the MCP server
-that your AI client talks to).
+Three console commands ship: `pjm` (the CLI), `pjm-mcp` (the legacy
+one-project MCP server), and `pjm-mcp-global` (the recommended multi-project
+MCP server that your AI client talks to).
 
 ---
 
@@ -51,19 +52,19 @@ You should see, in order:
    needed (new in 0.1.3).
 4. **Git hooks installed** — `pre-commit` for failure warnings,
    `post-commit` and `post-merge` for auto-capture.
-5. A printed **MCP client config block** with your absolute paths
-   already filled in (new in 0.1.3) — copy it.
+5. A printed **global MCP config block** — copy it once. Future `pjm init`
+   projects register automatically and use their persisted `project_id`.
 
 ---
 
 ## Step 3 — Wire up your AI client
 
-Paste the printed config block into your client's MCP config file:
+Paste the printed global config block once into your client's MCP config file:
 
 | Client | Config file |
 |---|---|
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Cursor | `~/.cursor/mcp.json` (per-project) or via Settings → MCP |
+| Cursor | Settings → Tools & MCPs (global) |
 | Antigravity (legacy) | `~/.gemini/antigravity/mcp_config.json` |
 | Codex | `~/.codex/config.toml` (TOML, not JSON) |
 
@@ -71,9 +72,9 @@ Then **fully quit and restart the client** (cold start — closing the
 window isn't enough; MCP servers initialize only on launch).
 
 **Verify the connection:** open your client's tools panel. You should
-see **14 projectmem tools**. Hover `search_events` — its `query` and
-`limit` parameters should show descriptions. If they don't, you're not
-on 0.1.3.
+see `list_projects` and project tools whose first parameter is `project_id`.
+This is the boundary that keeps projects isolated even though the client uses
+one MCP process.
 
 ---
 

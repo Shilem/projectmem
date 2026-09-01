@@ -10,6 +10,7 @@ from projectmem.commands import backfill as backfill_command
 from projectmem.commands import brief as brief_command
 from projectmem.commands import context as context_command
 from projectmem.commands import decision as decision_command
+from projectmem.commands import doctor as doctor_command
 from projectmem.commands import export as export_command
 from projectmem.commands import global_cmd as global_command
 from projectmem.commands import fix as fix_command
@@ -191,13 +192,17 @@ def search(
         False, "--failed-only",
         help="Only show failed attempts — the project's catalogue of dead ends.",
     ),
+    limit: int = typer.Option(
+        20, "--limit", "-n", min=1, max=100,
+        help="Maximum compact matches to return (default: 20).",
+    ),
 ) -> None:
-    """Substring (default) or regex search across events.
+    """Search event memory with SQLite FTS5 (or regex against the raw log).
 
-    Default mode is plain substring match. Add --regex for patterns like
-    'carousel|favicon' — without it those are treated as literal text.
+    Plain search uses a local, rebuildable index and returns compact metadata.
+    Add --regex for Python patterns such as 'carousel|favicon'.
     """
-    search_command.run(query, regex=regex, failed_only=failed_only)
+    search_command.run(query, regex=regex, failed_only=failed_only, limit=limit)
 
 
 @app.command()
@@ -302,6 +307,14 @@ def auto_capture(
 
 
 @app.command()
+def doctor(
+    fmt: str = typer.Option("text", "--format", "-f", help="Output format: text, json."),
+) -> None:
+    """Check project memory, projections, and auto-capture diagnostics."""
+    doctor_command.run(fmt=fmt)
+
+
+@app.command()
 def stats(
     fmt: str = typer.Option("text", "--format", "-f", help="Output format: text, json."),
 ) -> None:
@@ -321,7 +334,12 @@ def score(
 
 @app.command()
 def context(
-    tokens: int = typer.Option(2000, "--tokens", "-t", help="Token budget."),
+    tokens: int | None = typer.Option(
+        None,
+        "--tokens",
+        "-t",
+        help="Token budget (defaults to context_token_budget in project config).",
+    ),
     focus: str | None = typer.Option(None, "--focus", help="Focus on file or directory."),
     recent: str | None = typer.Option(None, "--recent", help="Time window (e.g. 3d, 2w)."),
     fmt: str = typer.Option("md", "--format", "-f", help="Output format: md, json."),
@@ -369,7 +387,12 @@ def watch(
 @app.command()
 def wrap(
     agent: str = typer.Argument("claude", help="Agent to wrap: claude, cursor, aider, generic."),
-    tokens: int = typer.Option(2000, "--tokens", "-t", help="Context token budget."),
+    tokens: int | None = typer.Option(
+        None,
+        "--tokens",
+        "-t",
+        help="Context token budget (defaults to context_token_budget in project config).",
+    ),
     focus: str | None = typer.Option(None, "--focus", help="Focus on file or directory."),
     recent: str | None = typer.Option(None, "--recent", help="Time window (e.g. 3d, 2w)."),
     preview: bool = typer.Option(False, "--preview", help="Show context without injecting."),

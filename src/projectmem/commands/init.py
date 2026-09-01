@@ -23,7 +23,9 @@ def run(
     global_tags: str | None = None,
     root: Path | None = None,
 ) -> None:
-    path = initialize(root)
+    # Persist only the explicit privacy opt-out. Re-running plain `pjm init`
+    # must not silently re-enable global promotion for an opted-out project.
+    path = initialize(root, global_enabled=False if no_global else None)
     typer.echo(f"Initialized {path}")
 
     root_path = root or Path.cwd()
@@ -34,6 +36,11 @@ def run(
     # `instructions=` field takes effect (L-004f).
     if not no_claude_md:
         _ensure_claude_md(root_path)
+
+    # Codex reads AGENTS.md hierarchically. Keep a small project-specific
+    # bridge there so the global MCP can be routed with this project's stable
+    # identity without duplicating the global workflow rules.
+    _ensure_agents_md(root_path)
 
     # Auto-detect the stack and pre-populate PROJECT_MAP.md so Setup Mode
     # has something to refine instead of starting from a blank placeholder.
@@ -96,37 +103,50 @@ def run(
 
 _CLAUDE_MD_BRIDGE_START = "<!-- >>> projectmem bridge >>> -->"
 _CLAUDE_MD_BRIDGE_END = "<!-- <<< projectmem bridge <<< -->"
+_AGENTS_MD_BRIDGE_START = "<!-- >>> projectmem codex bridge >>> -->"
+_AGENTS_MD_BRIDGE_END = "<!-- <<< projectmem codex bridge <<< -->"
 
 
-def _claude_md_bridge() -> str:
+def _project_id(root: Path) -> str:
+    """Return the persisted project identity used by the global MCP."""
+    from projectmem.project_registry import project_id_for_root
+
+    return project_id_for_root(root)
+
+
+def _claude_md_bridge(root: Path) -> str:
     """The bridge block written into CLAUDE.md.
 
-    Mirrors the MCP server's `instructions=` field (`mcp_server.py`):
-    same session-start trio, same write-side rule. Keep the two in sync
-    — divergence between them was the L-031 finding: CLAUDE.md said
-    "call get_summary first" while the MCP field said "call
-    get_instructions first," confusing AI clients that read both.
+    Supports both MCP entry points. The global server requires an explicit
+    persisted project id; the legacy ``pjm-mcp --root`` server keeps its
+    no-argument calls. This lets existing single-project configurations keep
+    working while newly initialized projects can use one global MCP config.
 
     Markers (`>>> projectmem bridge >>>` / `<<< projectmem bridge <<<`) let
     us safely re-emit / replace the block on later `pjm init` runs without
     clobbering the rest of the file.
     """
+    project_id = _project_id(root)
     return (
         f"{_CLAUDE_MD_BRIDGE_START}\n"
         "## projectmem (MANDATORY)\n\n"
         "This project uses projectmem for persistent memory + workflow rules.\n\n"
+        "When connected to `pjm-mcp-global`, use this exact project id for every "
+        f"project tool: `{project_id}`. Call `list_projects()` only to inspect "
+        "registered projects; never choose one from CWD or a filesystem path. "
+        "Legacy `pjm-mcp --root` does not take `project_id`.\n\n"
         "SESSION START — call these three MCP tools, in this order, BEFORE\n"
         "answering ANY question about this project:\n\n"
-        "  1. `get_instructions()` — loads the project's mandatory workflow\n"
+        "  1. `get_instructions(project_id)` — loads the project's mandatory workflow\n"
         "     rules. Without this you will not know how to log work\n"
         "     correctly, when to use `add_note` vs `add_decision`, or how\n"
         "     the event log is structured.\n"
-        "  2. `get_summary()` — loads project content. Do NOT answer from\n"
+        "  2. `get_summary(project_id)` — loads project content. Do NOT answer from\n"
         "     conversation history or by re-reading package.json / README /\n"
         "     source files.\n"
-        "  3. `get_project_map()` — loads structural layout when relevant.\n\n"
+        "  3. `get_project_map(project_id)` — loads structural layout when relevant.\n\n"
         "BEFORE modifying ANY file:\n"
-        "  - Call `precheck_file(path)` — check failure history first.\n\n"
+        "  - Call `precheck_file(project_id, path)` — check failure history first.\n\n"
         "DURING work — use MCP write tools, NEVER edit `.projectmem/`\n"
         "files directly via filesystem write:\n"
         "  - On a bug discovery → `log_issue(summary, location)`.\n"
@@ -147,7 +167,7 @@ def _claude_md_bridge() -> str:
 def _ensure_claude_md(root: Path) -> None:
     """Create or safely-update CLAUDE.md with the projectmem bridge block."""
     claude_md = root / "CLAUDE.md"
-    bridge = _claude_md_bridge()
+    bridge = _claude_md_bridge(root)
     if claude_md.exists():
         content = claude_md.read_text(encoding="utf-8")
         if _CLAUDE_MD_BRIDGE_START in content and _CLAUDE_MD_BRIDGE_END in content:
@@ -169,6 +189,49 @@ def _ensure_claude_md(root: Path) -> None:
     typer.echo("  CLAUDE.md: created with projectmem bridge.")
 
 
+def _agents_md_bridge(root: Path) -> str:
+    """Return the compact Codex bridge appended to a project's AGENTS.md."""
+    project_id = _project_id(root)
+    return (
+        f"{_AGENTS_MD_BRIDGE_START}\n"
+        "## Projectmem\n\n"
+        "Use the global `pjm-mcp-global` server for Projectmem. Pass this "
+        f"exact `project_id` to every project-scoped tool: `{project_id}`. "
+        "Do not bind `--root` or infer a project from CWD.\n\n"
+        "At session start call `get_instructions(project_id)`, then "
+        "`get_summary(project_id)`. Before editing a file call "
+        "`precheck_file(project_id, path)`.\n"
+        f"{_AGENTS_MD_BRIDGE_END}\n"
+    )
+
+
+def _ensure_agents_md(root: Path) -> None:
+    """Append or refresh the bounded Projectmem bridge in ``AGENTS.md``."""
+    agents_md = root / "AGENTS.md"
+    bridge = _agents_md_bridge(root)
+    if agents_md.exists():
+        content = agents_md.read_text(encoding="utf-8")
+        if _AGENTS_MD_BRIDGE_START in content and _AGENTS_MD_BRIDGE_END in content:
+            start = content.index(_AGENTS_MD_BRIDGE_START)
+            end = content.index(_AGENTS_MD_BRIDGE_END) + len(_AGENTS_MD_BRIDGE_END)
+            new_content = content[:start] + bridge.rstrip() + content[end:]
+            if new_content == content:
+                return
+            agents_md.write_text(new_content, encoding="utf-8")
+            typer.echo("  AGENTS.md: projectmem bridge refreshed.")
+            return
+
+        agents_md.write_text(
+            content.rstrip("\n") + "\n\n" + bridge,
+            encoding="utf-8",
+        )
+        typer.echo("  AGENTS.md: projectmem bridge appended.")
+        return
+
+    agents_md.write_text("# AGENTS.md\n\n" + bridge, encoding="utf-8")
+    typer.echo("  AGENTS.md: created with projectmem bridge.")
+
+
 def _try_auto_backfill(root: Path) -> None:
     """Backfill recent git history into events.jsonl.
 
@@ -182,9 +245,12 @@ def _try_auto_backfill(root: Path) -> None:
         return
 
     try:
-        from projectmem.commands.backfill import run as backfill_run
+        import contextlib
+
         # Capture stdout + stderr; we'll print our own one-liner.
-        import io, contextlib
+        import io
+
+        from projectmem.commands.backfill import run as backfill_run
         out_buf, err_buf = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
             backfill_run(limit=20, root=root)
@@ -213,7 +279,7 @@ def _try_auto_start_watch(root: Path) -> None:
 
     # watchdog is a required dependency — start the daemon (handles its own fork-and-detach)
     try:
-        from projectmem.commands.watch import _running_pid, _run_as_daemon
+        from projectmem.commands.watch import _run_as_daemon, _running_pid
 
         if _running_pid(root) is not None:
             return  # Already running
@@ -226,9 +292,9 @@ def _try_auto_start_watch(root: Path) -> None:
 def _inherit_global_memory(root: Path, filter_tags: str | None = None) -> None:
     """Detect stack and inject relevant global memory into AI_INSTRUCTIONS.md."""
     from projectmem.global_memory import (
+        build_inherited_instructions,
         detect_stack,
         get_relevant_entries,
-        build_inherited_instructions,
         global_dir,
     )
 
@@ -295,9 +361,15 @@ def _inherit_global_memory(root: Path, filter_tags: str | None = None) -> None:
     tags_str = ", ".join(stack["tags"][:5])
     typer.echo(f"\n  Global memory: Detected stack [{tags_str}]")
     if r_gotchas:
-        typer.echo(f"    → {len(r_gotchas)} library gotchas injected into AI_INSTRUCTIONS.md")
+        typer.echo(
+            f"    → {len(r_gotchas)} library gotchas available; "
+            "bounded preview injected into AI_INSTRUCTIONS.md"
+        )
     if r_patterns:
-        typer.echo(f"    → {len(r_patterns)} patterns injected into AI_INSTRUCTIONS.md")
+        typer.echo(
+            f"    → {len(r_patterns)} patterns available; "
+            "bounded preview injected into AI_INSTRUCTIONS.md"
+        )
 
 
 # ── L-048: pre-populate PROJECT_MAP.md from detected stack ──────────────
@@ -530,21 +602,23 @@ def _detect_main_folders(root: Path) -> list[tuple[str, str]]:
 # gotcha documented in the README) removes a whole class of support questions.
 
 def _print_mcp_config(root: Path) -> None:
-    """Print a copy-pasteable MCP client config block + client-config paths."""
+    """Print the one-time multi-project MCP configuration.
+
+    ``root`` remains in the signature for compatibility with the init flow;
+    it is deliberately not emitted. The global MCP resolves only registered
+    project ids supplied per tool call.
+    """
     py = sys.executable  # Absolute path — subprocesses don't inherit shell PATH.
     bar = "═" * 62
     typer.echo("")
     typer.echo(bar)
-    typer.echo("  MCP client configuration — paste this into your client:")
+    typer.echo("  Global MCP configuration — paste once into your client:")
     typer.echo("")
     typer.echo("    {")
     typer.echo('      "mcpServers": {')
-    typer.echo('        "projectmem": {')
+    typer.echo('        "projectmem-global": {')
     typer.echo(f'          "command": "{py}",')
-    typer.echo('          "args": [')
-    typer.echo('            "-m", "projectmem.mcp_server",')
-    typer.echo(f'            "--root", "{root}"')
-    typer.echo('          ]')
+    typer.echo('          "args": ["-m", "projectmem.mcp_global_server"]')
     typer.echo("        }")
     typer.echo("      }")
     typer.echo("    }")
@@ -554,12 +628,16 @@ def _print_mcp_config(root: Path) -> None:
         "    Claude Desktop  ~/Library/Application Support/Claude/"
         "claude_desktop_config.json"
     )
-    typer.echo("    Cursor          ~/.cursor/mcp.json  (per-project)")
+    typer.echo("    Cursor          Settings → Tools & MCPs (global)")
     typer.echo(
         "    Antigravity     ~/.gemini/antigravity/mcp_config.json  "
         "(legacy IDE; v2 path may differ)"
     )
     typer.echo("    Codex (TOML!)   ~/.codex/config.toml")
     typer.echo("")
+    typer.echo(
+        "  Each `pjm init` project is registered automatically; tools use its project_id, no --root needed."
+    )
+    typer.echo("  Existing pjm-mcp --root configurations remain supported for one project.")
     typer.echo("  After pasting: fully quit and restart your client (cold start).")
     typer.echo(bar)

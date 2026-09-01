@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 
 from projectmem.models import Event
 from projectmem.storage import (
     ProjectMemError,
     append_event,
+    clear_current_issue,
     get_git_commit,
     latest_open_issue_within,
     next_issue_id,
+    normalize_issue_id,
+    project_transaction,
     read_current_issue,
     read_events,
+    validate_issue_reference,
     write_current_issue,
 )
 from projectmem.summary import regenerate_summary
@@ -29,6 +35,7 @@ def run(
     location: str | None = None,
     issue: str | None = None,
     auto_issue: bool = False,
+    root: Path | None = None,
 ) -> Event:
     """Record an attempt on the active issue.
 
@@ -44,52 +51,76 @@ def run(
          (L-008: removes the "no open issue" UX friction).
     """
     selected = [
-        name for name, flag in [("worked", worked), ("failed", failed), ("partial", partial)] if flag
+        name
+        for name, flag in [
+            ("worked", worked),
+            ("failed", failed),
+            ("partial", partial),
+        ]
+        if flag
     ]
     if len(selected) > 1:
         raise ProjectMemError("Use only one of --worked, --failed, or --partial.")
 
-    events = read_events()
+    with project_transaction(root) as project_root:
+        events = read_events(project_root)
 
-    issue_id: str | None = None
-    if issue:
-        issue_id = issue.lstrip("#")
-    else:
-        issue_id = read_current_issue() or latest_open_issue_within(
-            events, minutes=AUTO_ATTACH_WINDOW_MINUTES
-        )
+        issue_id: str | None = None
+        if issue is not None:
+            # Explicit attribution must never silently create a parent issue or
+            # attach to a closed one. Normalize the same numeric forms accepted by
+            # `pjm fix` (1 / 001 / 0001).
+            issue_id = validate_issue_reference(events, issue, require_open=True)
+        else:
+            marker = normalize_issue_id(read_current_issue(project_root))
+            if marker is not None:
+                try:
+                    issue_id = validate_issue_reference(
+                        events, marker, require_open=True
+                    )
+                except ProjectMemError:
+                    # A stale marker is advisory. Clear it before considering the
+                    # time-fenced fallback so it cannot route a new attempt into a
+                    # closed or deleted issue.
+                    clear_current_issue(project_root)
+            if issue_id is None:
+                issue_id = latest_open_issue_within(
+                    events, minutes=AUTO_ATTACH_WINDOW_MINUTES
+                )
 
-    if issue_id is None:
-        if not auto_issue:
-            raise ProjectMemError(
-                "No active issue. Run `pjm log \"<summary>\"` first, "
-                "pass `--issue <id>` to attach explicitly, or rerun with "
-                "`--auto-issue` to auto-create a parent issue from this attempt's text."
+        if issue_id is None:
+            if not auto_issue:
+                raise ProjectMemError(
+                    "No active issue. Run `pjm log \"<summary>\"` first, "
+                    "pass `--issue <id>` to attach explicitly, or rerun with "
+                    "`--auto-issue` to auto-create a parent issue from this "
+                    "attempt's text."
+                )
+            # Auto-create an implicit parent issue (L-008).
+            new_id = next_issue_id(events)
+            append_event(
+                Event(
+                    type="issue",
+                    issue_id=new_id,
+                    summary=text,
+                    git_commit=get_git_commit(project_root),
+                    location=location,
+                ),
+                project_root,
             )
-        # Auto-create an implicit parent issue (L-008).
-        new_id = next_issue_id(events)
-        append_event(
-            Event(
-                type="issue",
-                issue_id=new_id,
-                summary=text,
-                git_commit=get_git_commit(),
-                location=location,
-            )
-        )
-        write_current_issue(new_id)
-        issue_id = new_id
+            write_current_issue(new_id, project_root)
+            issue_id = new_id
 
-    outcome = selected[0] if selected else "partial"
-    event = Event(
-        type="attempt",
-        issue_id=issue_id,
-        summary=text,
-        outcome=outcome,
-        git_commit=get_git_commit(),
-        location=location,
-    )
-    append_event(event)
-    regenerate_summary()
+        outcome = selected[0] if selected else "partial"
+        event = Event(
+            type="attempt",
+            issue_id=issue_id,
+            summary=text,
+            outcome=outcome,
+            git_commit=get_git_commit(project_root),
+            location=location,
+        )
+        append_event(event, project_root)
+        regenerate_summary(project_root)
     typer.echo(f"Recorded {outcome} attempt on #{issue_id}")
     return event

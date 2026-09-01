@@ -30,6 +30,7 @@ from projectmem.storage import (
     mem_path,
     require_mem_dir,
 )
+from projectmem.summary import regenerate_summary
 
 
 # ── Tunables (defaults — overridable via .projectmem/config.toml later) ──
@@ -349,11 +350,23 @@ def _log_churn_event(
 
     try:
         append_event(event, root)
-        if verbose:
-            print(f"[watch] LOGGED CHURN: {rel} ({edit_count} edits)", flush=True)
     except Exception as exc:
         if verbose:
             print(f"[watch] failed to write event: {exc}", flush=True)
+        return
+
+    # append_event is intentionally a low-level append primitive and does not
+    # rebuild derived files.  Churn is the watcher's only write path, so refresh
+    # the summary once per logged incident rather than on every filesystem
+    # notification; this keeps summary.md consistent without a per-save rebuild.
+    try:
+        regenerate_summary(root)
+    except Exception as exc:
+        if verbose:
+            print(f"[watch] failed to refresh summary: {exc}", flush=True)
+    else:
+        if verbose:
+            print(f"[watch] LOGGED CHURN: {rel} ({edit_count} edits)", flush=True)
 
 
 def _stop_daemon(root: Path | None = None) -> None:

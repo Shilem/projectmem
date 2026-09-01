@@ -82,7 +82,7 @@ def _precheck_snippet(pjm_path: str) -> str:
         '    PJM_BIN="$(command -v pjm 2>/dev/null || command -v projectmem 2>/dev/null)"\n'
         'fi\n'
         'if [ -d ".projectmem" ] && [ -n "$PJM_BIN" ]; then\n'
-        '    "$PJM_BIN" precheck --level warn || true\n'
+        '    "$PJM_BIN" precheck --level warn\n'
         'fi\n'
         f"{HOOK_MARKER_END}\n"
     )

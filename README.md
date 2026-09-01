@@ -211,6 +211,16 @@ The architecture is built around one rule: **AI reads small, distilled files. To
 
 **For:** Claude Desktop, Cursor, Antigravity, Codex — and any tool with native MCP support. The MCP server forces the AI to read memory and log every action automatically.
 
+### Global multi-project mode (recommended)
+
+Use `pjm-mcp-global` once in the client’s **global** MCP configuration. It is
+one stdio process per client session, but can serve every ProjectMem project
+registered on this machine. Each project tool takes an explicit opaque
+`project_id`; the server never routes from CWD, a supplied filesystem path, or
+the previously selected project. `pjm init` registers a project and gives it a
+persisted identity automatically. Existing `pjm-mcp --root` configurations
+remain available as the legacy one-project mode.
+
 ### The 3-minute workflow (let your AI do the setup)
 
 1. **Install + init.** `pip install projectmem`, then `cd` into your project and run `pjm init` — or simply ask your AI to run it.
@@ -219,10 +229,11 @@ The architecture is built around one rule: **AI reads small, distilled files. To
 
 ```text
 Hi — I use projectmem as this project's memory. Before anything else,
-call get_instructions(), then get_summary(), then get_project_map() to
+call list_projects(), then use this project's project_id with
+get_instructions(), get_summary(), and get_project_map() to
 load what we already know. As we work, log issues, attempts
-(failed/worked), fixes, decisions, and notes with the projectmem tools,
-and call precheck_file(path) before you edit a file. Ideas and plans go
+(failed/worked), fixes, decisions, and notes with that project_id,
+and call precheck_file(project_id, path) before you edit a file. Ideas and plans go
 in plan.md via get_plan() — never as events.
 ```
 
@@ -245,13 +256,12 @@ If you prefer the raw file path: `~/Library/Application Support/Claude/claude_de
 Paste this block:
 
 ```json
-"mcpServers": {
-  "projectmem": {
-    "command": "/opt/anaconda3/bin/python",
-    "args": [
-      "-m", "projectmem.mcp_server",
-      "--root", "/absolute/path/to/your/project"
-    ]
+{
+  "mcpServers": {
+    "projectmem-global": {
+      "command": "/opt/anaconda3/bin/python",
+      "args": ["-m", "projectmem.mcp_global_server"]
+    }
   }
 }
 ```
@@ -259,7 +269,7 @@ Paste this block:
 **Two things to know about this block:**
 
 - **Use the absolute path to `python`** (e.g. `/opt/anaconda3/bin/python`, or run `which python` to find yours). Claude Desktop subprocesses don't inherit your shell `PATH`, so bare `"python"` often fails.
-- **We pass the project root via `--root`, not the `cwd` JSON field.** Claude Desktop's current build (with the Epitaxy / Cowork workspace system) silently ignores the `cwd` field — the server ends up running with `cwd=/` and can't find `.projectmem/`. The `--root` flag is honored by projectmem directly (read from `sys.argv`) and works regardless of how Claude Desktop spawns the subprocess.
+- **Do not pass `--root` or set a project `cwd`.** The global server rejects implicit routing; after `list_projects()` the AI passes the registered `project_id` on every project tool call. This works even when Claude Desktop launches the process from `/`.
 
 Then **fully quit Claude Desktop (Cmd+Q on Mac)** and reopen — MCP servers only initialize on cold start.
 
@@ -268,17 +278,14 @@ Then **fully quit Claude Desktop (Cmd+Q on Mac)** and reopen — MCP servers onl
 Two ways to register the MCP server — pick whichever fits your workflow:
 
 1. **Global (recommended):** Cursor menu → `Settings…` → left sidebar **Tools & MCPs** → **Installed MCP Servers** → **Add Custom MCP**. Paste the JSON below.
-2. **Per-project:** drop the JSON into `<project-root>/.cursor/mcp.json` — only active when that project is open.
+2. **Legacy per-project:** drop a `pjm-mcp --root` JSON block into `<project-root>/.cursor/mcp.json` — only active when that project is open.
 
 ```json
 {
   "mcpServers": {
-    "projectmem": {
+    "projectmem-global": {
       "command": "/opt/anaconda3/bin/python",
-      "args": [
-        "-m", "projectmem.mcp_server",
-        "--root", "/absolute/path/to/your/project"
-      ]
+      "args": ["-m", "projectmem.mcp_global_server"]
     }
   }
 }
@@ -287,9 +294,9 @@ Two ways to register the MCP server — pick whichever fits your workflow:
 **Two things to know about this block (same gotchas as Claude Desktop):**
 
 - **Use the absolute path to `python`** (run `which python` to find yours). Cursor subprocesses don't reliably inherit your shell `PATH`.
-- **Pass the project root via `--root`, not the `cwd` JSON field.** Cursor — like Claude Desktop — silently ignores `cwd`: the server ends up running with `cwd=~` and can't find `.projectmem/`. The `--root` flag is honored by projectmem directly and works around the bug.
+- **Do not pass `--root` or set a project `cwd`.** `list_projects()` plus explicit `project_id` provides the project boundary, so Cursor's process working directory is irrelevant.
 
-Then **fully quit Cursor (Cmd+Q on Mac)** and reopen. projectmem also auto-discovers `.projectmem/` by walking up from CWD (like git does for `.git/`), and honors `PROJECTMEM_ROOT` and a `--root <path>` CLI argument.
+Then **fully quit Cursor (Cmd+Q on Mac)** and reopen. The global server does not use CWD discovery, `PROJECTMEM_ROOT`, or a mutable selected project; those are legacy `pjm-mcp --root` behaviors only.
 
 ### Antigravity
 
@@ -308,10 +315,9 @@ Paste this block:
 ```json
 {
   "mcpServers": {
-    "projectmem": {
+    "projectmem-global": {
       "command": "python",
-      "args": ["-m", "projectmem.mcp_server"],
-      "cwd": "/absolute/path/to/your/project"
+      "args": ["-m", "projectmem.mcp_global_server"]
     }
   }
 }
@@ -328,16 +334,15 @@ Codex stores MCP config as **TOML** (not JSON) in `~/.codex/config.toml`. There'
 Append this block (preserves any existing config):
 
 ```toml
-[mcp_servers.projectmem]
+[mcp_servers.projectmem-global]
 command = "/opt/anaconda3/bin/python"
-args = ["-m", "projectmem.mcp_server", "--root", "/absolute/path/to/your/project"]
-cwd = "/absolute/path/to/your/project"
+args = ["-m", "projectmem.mcp_global_server"]
 ```
 
 Three things to know about this block:
 
 - **Use the absolute path to `python`** (run `which python` to find yours). Codex subprocesses don't reliably inherit your shell `PATH`.
-- **Pass the project root via `--root` in args** (defense in depth). The `cwd` field appears to work in Codex, unlike Claude Desktop and Cursor — but `--root` costs nothing and saves us if any future Codex build regresses.
+- **Do not add `--root` or `cwd`.** One global configuration serves all projects. The tools require a registered `project_id`, which is intentional isolation rather than a current-folder heuristic.
 - **Set your reasoning effort to `medium` or higher.** On low-reasoning Codex skips `get_instructions` from the session-start trio, which can cause the AI to miss the Setup Mode workflow rules. Medium+ honors the full trio automatically.
 
 **Validate the TOML:**
@@ -362,9 +367,11 @@ that session.
 
 ### Other MCP Tools
 
-Any MCP-compatible client works — point your tool at
-`python -m projectmem.mcp_server` and either set `cwd` to your project
-root or rely on the parent-walk auto-discovery.
+Any MCP-compatible client works — point its global MCP configuration at
+`python -m projectmem.mcp_global_server`. The agent calls `list_projects()`
+and includes the returned `project_id` in every project tool call. For older
+clients that cannot supply that parameter, the legacy one-project entry
+`python -m projectmem.mcp_server --root /absolute/project` remains available.
 
 ### MCP Tools Exposed
 

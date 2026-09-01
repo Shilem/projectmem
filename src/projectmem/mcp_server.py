@@ -33,6 +33,7 @@ import functools
 import io
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Annotated, Callable, Optional
 
@@ -41,16 +42,57 @@ from pydantic import Field
 
 from projectmem.commands import attempt, decision, fix, log, note
 from projectmem.storage import (
+    ProjectMemError,
     ai_instructions_path,
     discover_mem_dir,
-    project_map_path,
     plan_path,
+    project_map_path,
     read_events,
     summary_path,
 )
 
-
 # ── L-005: pin the project root before tools run ────────────────────────
+
+_PROJECT_ROOT_ERROR: str | None = None
+# ``os.chdir`` and ``sys.stdout`` are process-global.  A FastMCP process may
+# execute synchronous tools in multiple worker threads, so those two values
+# must be protected for the whole duration of a tool call.  The lock is
+# re-entrant because the two context managers below are intentionally usable
+# independently as well as nested by ``safe_tool``.
+_TOOL_GLOBAL_STATE_LOCK = threading.RLock()
+
+
+def _validate_project_root(path: Path, source: str) -> Path | None:
+    """Validate a configured root without falling back to the process CWD."""
+    global _PROJECT_ROOT_ERROR
+    try:
+        resolved = path.expanduser().resolve()
+    except OSError as exc:
+        _PROJECT_ROOT_ERROR = (
+            f"Invalid project root from {source}: cannot resolve {path}: {exc}."
+        )
+        return None
+
+    if not resolved.exists():
+        _PROJECT_ROOT_ERROR = (
+            f"Invalid project root from {source}: {resolved} does not exist."
+        )
+        return None
+    if not resolved.is_dir():
+        _PROJECT_ROOT_ERROR = (
+            f"Invalid project root from {source}: {resolved} is not a directory."
+        )
+        return None
+
+    mem_dir = resolved / ".projectmem"
+    if not mem_dir.is_dir() or not (mem_dir / "config.toml").is_file():
+        _PROJECT_ROOT_ERROR = (
+            f"Invalid project root from {source}: {resolved} has no initialized "
+            "projectmem memory (.projectmem/config.toml). Run `pjm init` first."
+        )
+        return None
+    return resolved
+
 
 def _resolve_project_root() -> Path | None:
     """Resolve the project root for this MCP session.
@@ -59,30 +101,74 @@ def _resolve_project_root() -> Path | None:
       1. --root <path> CLI argument (highest — explicit beats inferred)
       2. $PROJECTMEM_ROOT environment variable
       3. Parent-walk from CWD looking for `.projectmem/` (like git)
-      4. None — tools will surface the helpful error from require_mem_dir.
+      4. None — tools surface an explicit session-root error.
     """
+    global _PROJECT_ROOT_ERROR
+    _PROJECT_ROOT_ERROR = None
+
     if "--root" in sys.argv:
         idx = sys.argv.index("--root")
-        if idx + 1 < len(sys.argv):
-            return Path(sys.argv[idx + 1]).expanduser().resolve()
+        if idx + 1 >= len(sys.argv):
+            _PROJECT_ROOT_ERROR = (
+                "Invalid project root: --root requires a path to an initialized "
+                "project directory."
+            )
+            return None
+        return _validate_project_root(Path(sys.argv[idx + 1]), "--root")
     env_root = os.environ.get("PROJECTMEM_ROOT")
     if env_root:
-        return Path(env_root).expanduser().resolve()
-    found = discover_mem_dir()
+        return _validate_project_root(Path(env_root), "PROJECTMEM_ROOT")
+    try:
+        found = discover_mem_dir()
+    except OSError as exc:
+        _PROJECT_ROOT_ERROR = f"Unable to discover project root: {exc}."
+        return None
     if found is not None:
-        return found.parent
+        return _validate_project_root(found.parent, "CWD discovery")
+    _PROJECT_ROOT_ERROR = (
+        "Unable to resolve an initialized project root from CWD. Set --root or "
+        "PROJECTMEM_ROOT to a project containing .projectmem/config.toml."
+    )
     return None
 
 
 _PROJECT_ROOT = _resolve_project_root()
-if _PROJECT_ROOT is not None:
-    # All tools rely on Path.cwd() via storage helpers; pin it once at startup
-    # so the server keeps working even if some library chdir()s out from under
-    # us mid-session.
-    try:
-        os.chdir(_PROJECT_ROOT)
-    except OSError:
-        pass
+
+
+@contextlib.contextmanager
+def _project_root_cwd():
+    """Keep storage helpers inside the validated root for one tool call.
+
+    The legacy command handlers still discover their project through
+    ``Path.cwd()``.  Until those handlers all accept an explicit root, this is
+    the narrow compatibility boundary that protects their process-global CWD.
+    Holding the same lock as ``_suppress_stdout`` prevents either global from
+    being observed in a half-switched state by another tool thread.
+    """
+    with _TOOL_GLOBAL_STATE_LOCK:
+        if _PROJECT_ROOT is None:
+            raise ProjectMemError(
+                _PROJECT_ROOT_ERROR or "Project root is unavailable."
+            )
+        original = Path.cwd()
+        try:
+            os.chdir(_PROJECT_ROOT)
+        except OSError as exc:
+            raise ProjectMemError(
+                f"Project root {_PROJECT_ROOT} cannot be used: {exc}."
+            ) from exc
+        try:
+            yield
+        finally:
+            try:
+                os.chdir(original)
+            except OSError:
+                # Keep the process pinned to the validated root if a tool
+                # changed into a directory that disappeared during the call.
+                try:
+                    os.chdir(_PROJECT_ROOT)
+                except OSError:
+                    pass
 
 
 # ── L-009: stdout suppression for any tool that calls into CLI code ─────
@@ -96,12 +182,13 @@ def _suppress_stdout():
     so we replace it for the body of every tool. The captured text is
     discarded — return values carry the user-facing message.
     """
-    saved = sys.stdout
-    sys.stdout = io.StringIO()
-    try:
-        yield
-    finally:
-        sys.stdout = saved
+    with _TOOL_GLOBAL_STATE_LOCK:
+        saved = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            yield
+        finally:
+            sys.stdout = saved
 
 
 # ── L-010: never let a tool exception crash the connection ──────────────
@@ -117,7 +204,9 @@ def safe_tool(fn: Callable) -> Callable:
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         try:
-            with _suppress_stdout():
+            if _PROJECT_ROOT_ERROR:
+                raise ProjectMemError(_PROJECT_ROOT_ERROR)
+            with _project_root_cwd(), _suppress_stdout():
                 return fn(*args, **kwargs)
         except Exception as exc:  # pragma: no cover - defensive
             return f"projectmem tool error: {type(exc).__name__}: {exc}"
@@ -150,6 +239,9 @@ mcp = FastMCP(
         "CONTEXT-SPECIFIC reads:\n"
         "  - User mentions a specific file → call precheck_file(path).\n"
         "  - User mentions a library → call get_global_gotchas(library).\n"
+        "  - User asks about a past issue, file, error, or decision → call\n"
+        "    search_events(query, limit=5) first, then get_issue() only for\n"
+        "    the selected issue. Use get_context() for broad work only.\n"
         "\n"
         "DURING work — use MCP write tools, NEVER edit .projectmem/ files\n"
         "directly via filesystem write:\n"
@@ -286,22 +378,27 @@ def precheck_file(
 @safe_tool
 def get_issue(
     issue_id: Annotated[str, Field(
-        description="Zero-padded 4-digit issue ID returned by log_issue "
-                    "(e.g., '0042'). Numeric strings without padding "
-                    "(e.g., '42') are also accepted."
+        description="Issue ID returned by log_issue (e.g., '0042'). "
+                    "Numeric strings are normalized to the zero-padded "
+                    "4-digit form, so '42' resolves to issue '0042'."
     )],
 ) -> str:
     """Read one specific issue's full history by ID (token-efficient).
 
     Use this when you only need one issue's context instead of the whole
-    summary. Example: get_issue('0042').
+    summary. Numeric IDs are normalized before lookup (for example,
+    get_issue('42') reads the same issue as get_issue('0042')).
 
     Read-only."""
     from projectmem.storage import issues_dir
-    idir = issues_dir()
-    matches = list(idir.glob(f"{issue_id}-*.md"))
-    if not matches:
+    raw_id = issue_id.strip()
+    normalized_id = str(int(raw_id)).zfill(4) if raw_id.isdecimal() else None
+    if normalized_id is None:
         return f"No issue found with ID {issue_id}."
+    idir = issues_dir()
+    matches = list(idir.glob(f"{normalized_id}-*.md"))
+    if not matches:
+        return f"No issue found with ID {normalized_id}."
     return matches[0].read_text(encoding="utf-8")
 
 
@@ -309,40 +406,46 @@ def get_issue(
 @safe_tool
 def search_events(
     query: Annotated[str, Field(
-        description="Case-insensitive substring matched against each "
-                    "event's summary and notes. Plain text only — no "
-                    "regex or boolean operators."
+        description="Plain terms matched locally against event IDs, summaries, "
+                    "notes, file paths, locations, and issue IDs. Results are "
+                    "compact metadata; no regex or boolean operators."
     )],
     limit: Annotated[int, Field(
         description="Maximum number of matching events to return "
-                    "(most recent first). Defaults to 10. Recommended "
-                    "range: 1-100.",
-        ge=1, le=100,
-    )] = 10,
+                    "(default: 5; use the smallest useful number). "
+                    "Range: 1-20.",
+        ge=1, le=20,
+    )] = 5,
 ) -> str:
-    """Plain-text search across all logged events.
+    """Search compact local event metadata before loading full context.
 
-    Token-efficient alternative to get_summary when you only need events
-    matching a keyword. Returns matching event summaries with type and
-    timestamp.
+    Uses a disposable SQLite FTS5 projection that is rebuilt from the
+    append-only log when missing, stale, or corrupt.  It returns only compact
+    metadata, so use ``get_issue`` after selecting a concrete issue instead
+    of requesting generic context.
 
-    Read-only. Case-insensitive substring matching against each event's
-    summary and notes. Empty result returns a friendly message, not an
-    error."""
-    events = read_events()
-    q = query.lower()
-    matches = []
-    for e in events:
-        if q in e.summary.lower() or (e.notes and q in e.notes.lower()):
-            matches.append(e)
-    matches = matches[-limit:]
+    Read-only. Empty result returns a friendly message, not an error."""
+    from projectmem.search_index import SearchIndexError, search_events as search_index_events
+
+    try:
+        matches = search_index_events(query, limit=limit, root=_PROJECT_ROOT)
+    except (SearchIndexError, ValueError, TypeError) as exc:
+        return f"Search index unavailable: {type(exc).__name__}: {exc}"
     if not matches:
         return f"No events match '{query}'."
     lines = [f"Found {len(matches)} match(es) for '{query}':"]
-    for e in matches:
-        outcome = f" ({e.outcome})" if e.outcome else ""
-        loc = f" @ {e.location}" if e.location else ""
-        lines.append(f"  [{e.type}{outcome}] {e.summary}{loc}")
+    for event in matches:
+        outcome = f" ({event['outcome']})" if event["outcome"] else ""
+        issue = f" #{event['issue_id']}" if event["issue_id"] else ""
+        retired_tag = " (superseded)" if event["superseded"] else ""
+        location = f" @ {event['location']}" if event["location"] else ""
+        summary = event["summary"]
+        if len(summary) > 240:
+            summary = summary[:239].rstrip() + "…"
+        lines.append(
+            f"  [{event['type']}{outcome}]{issue} {summary}{retired_tag}{location} "
+            f"(event {event['id']})"
+        )
     return "\n".join(lines)
 
 
@@ -357,6 +460,7 @@ def get_score() -> str:
 
     Read-only; computes the score from events.jsonl on each call."""
     import json
+
     from projectmem.commands.score import calculate_score
     from projectmem.storage import events_path
     raw = []
@@ -381,13 +485,13 @@ def get_score() -> str:
 @mcp.tool()
 @safe_tool
 def get_context(
-    tokens: Annotated[int, Field(
-        description="Approximate target token budget for the returned "
-                    "markdown (default 2000). Output may be slightly over "
-                    "or under as events are included as whole units. "
-                    "Recommended range: 500-8000.",
+    tokens: Annotated[Optional[int], Field(
+        description="Optional target token budget for the returned markdown. "
+                    "When omitted, uses context_token_budget from the "
+                    "project's .projectmem/config.toml or the 2000-token "
+                    "default. The generated output is capped at this budget.",
         ge=100, le=20000,
-    )] = 2000,
+    )] = None,
     focus: Annotated[Optional[str], Field(
         description="Optional path prefix or keyword to bias selection "
                     "toward (e.g., 'src/auth/'). When omitted, the "
@@ -396,14 +500,24 @@ def get_context(
 ) -> str:
     """Generate a token-budgeted memory context block.
 
-    Use when you don't want to read the full summary. ``focus`` (e.g.
-    'src/auth/') biases the context toward a specific area.
+    Use for broad project work. For a specific historical error, file, or
+    decision, call ``search_events`` first; it returns smaller metadata and
+    lets you fetch only the selected issue. ``focus`` (e.g. 'src/auth/')
+    biases this broader context toward one area.
 
     Read-only; assembles a freshly-budgeted context block from
     events.jsonl."""
-    from projectmem.commands.context import generate_context
-    events = read_events()
-    result = generate_context(events, token_budget=tokens, focus=focus, recent_days=30)
+    from projectmem.commands.context import generate_context, resolve_token_budget
+    effective_tokens = resolve_token_budget(tokens, _PROJECT_ROOT)
+    events = read_events(_PROJECT_ROOT)
+    result = generate_context(
+        events,
+        token_budget=effective_tokens,
+        focus=focus,
+        recent_days=30,
+        root=_PROJECT_ROOT,
+        use_config=False,
+    )
     return result["markdown"]
 
 

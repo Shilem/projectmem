@@ -19,9 +19,10 @@ def test_init_creates_projectmem_files(tmp_path, monkeypatch):
     assert (tmp_path / ".projectmem" / "events.jsonl").is_file()
     assert (tmp_path / ".projectmem" / "issues").is_dir()
     assert (tmp_path / ".projectmem" / "config.toml").is_file()
-    assert ".projectmem/events.jsonl" in (tmp_path / ".gitignore").read_text(
-        encoding="utf-8"
-    )
+    assert (tmp_path / "AGENTS.md").is_file()
+    gitignore = (tmp_path / ".gitignore").read_text(encoding="utf-8")
+    assert ".projectmem/events.jsonl" in gitignore
+    assert ".projectmem/search.sqlite3" in gitignore
 
     summary = (tmp_path / ".projectmem" / "summary.md").read_text(encoding="utf-8")
     instructions = (tmp_path / ".projectmem" / "AI_INSTRUCTIONS.md").read_text(
@@ -43,6 +44,41 @@ def test_init_creates_projectmem_files(tmp_path, monkeypatch):
     assert "Status: not created yet" in project_map
     assert "## Structure" in project_map
     assert "## Relationships" in project_map
+
+
+def test_init_appends_idempotent_projectmem_bridge_to_agents_md(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    agents_md = tmp_path / "AGENTS.md"
+    agents_md.write_text(
+        "# Existing project rules\n\nKeep this content.\n", encoding="utf-8"
+    )
+    runner = CliRunner()
+    args = [
+        "init",
+        "--no-hooks",
+        "--no-global",
+        "--no-watch",
+        "--no-backfill",
+        "--no-claude-md",
+        "--no-stack-detect",
+        "--no-mcp-config",
+        "--no-structure",
+    ]
+
+    result = runner.invoke(app, args, catch_exceptions=False)
+    assert result.exit_code == 0
+    first = agents_md.read_text(encoding="utf-8")
+    assert "Keep this content." in first
+    assert first.count("<!-- >>> projectmem codex bridge >>>") == 1
+    assert "project_id` to every project-scoped tool" in first
+    assert "get_instructions(project_id)" in first
+    assert "precheck_file(project_id, path)" in first
+
+    result = runner.invoke(app, args, catch_exceptions=False)
+    assert result.exit_code == 0
+    second = agents_md.read_text(encoding="utf-8")
+    assert second.count("<!-- >>> projectmem codex bridge >>>") == 1
+    assert second == first
 
 
 def test_instructions_command_prints_ai_protocol(tmp_path, monkeypatch):

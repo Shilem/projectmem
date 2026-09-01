@@ -202,9 +202,10 @@ def test_print_mcp_config_contains_expected_pieces(
     _print_mcp_config(tmp_path / "myproj")
     out = capsys.readouterr().out
     assert '"mcpServers"' in out
-    assert '"projectmem"' in out
-    assert '"-m", "projectmem.mcp_server"' in out
-    assert f'--root", "{tmp_path / "myproj"}"' in out
+    assert '"projectmem-global"' in out
+    assert '"-m", "projectmem.mcp_global_server"' in out
+    assert str(tmp_path / "myproj") not in out
+    assert "project_id" in out
     # All 4 client paths should be mentioned.
     assert "Claude Desktop" in out
     assert "Cursor" in out

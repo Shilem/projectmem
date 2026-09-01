@@ -173,9 +173,9 @@ def test_attempt_after_fix_does_not_misattribute(tmp_path, monkeypatch):
 
     # No marker, and the only OPEN issue (#1) is older than the 5-minute
     # auto-attach window — except we can't easily fast-forward time in a
-    # unit test, so we assert via --issue routing instead.
+    # unit test, so we assert via explicit routing to the still-open issue.
     result = runner.invoke(
-        app, ["attempt", "regression check", "--worked", "--issue", "0002"],
+        app, ["attempt", "regression check", "--worked", "--issue", "0001"],
         catch_exceptions=False,
     )
     assert result.exit_code == 0
@@ -185,4 +185,88 @@ def test_attempt_after_fix_does_not_misattribute(tmp_path, monkeypatch):
         .splitlines()[-1]
     )
     assert last["type"] == "attempt"
-    assert last["issue_id"] == "0002"
+    assert last["issue_id"] == "0001"
+
+
+def test_attempt_rejects_unknown_explicit_issue(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    runner.invoke(app, ["log", "known issue"], catch_exceptions=False)
+    events_path = tmp_path / ".projectmem" / "events.jsonl"
+    before = len(events_path.read_text(encoding="utf-8").splitlines())
+
+    result = runner.invoke(
+        app,
+        ["attempt", "dangling attempt", "--failed", "--issue", "42"],
+    )
+
+    assert result.exit_code == 1
+    assert result.exception is not None
+    assert "Issue #0042 was not found" in str(result.exception)
+    assert len(events_path.read_text(encoding="utf-8").splitlines()) == before
+
+
+def test_attempt_rejects_closed_explicit_issue(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    runner.invoke(app, ["log", "closed issue"], catch_exceptions=False)
+    runner.invoke(app, ["fix", "confirmed fix"], catch_exceptions=False)
+    events_path = tmp_path / ".projectmem" / "events.jsonl"
+    before = len(events_path.read_text(encoding="utf-8").splitlines())
+
+    result = runner.invoke(
+        app,
+        ["attempt", "retry after close", "--worked", "--issue", "1"],
+    )
+
+    assert result.exit_code == 1
+    assert result.exception is not None
+    assert "Issue #0001 is already closed" in str(result.exception)
+    assert len(events_path.read_text(encoding="utf-8").splitlines()) == before
+
+
+def test_fix_rejects_repeated_close(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    runner.invoke(app, ["log", "fix once"], catch_exceptions=False)
+    runner.invoke(app, ["fix", "first fix"], catch_exceptions=False)
+    events_path = tmp_path / ".projectmem" / "events.jsonl"
+    before = len(events_path.read_text(encoding="utf-8").splitlines())
+
+    result = runner.invoke(
+        app, ["fix", "duplicate fix", "--issue", "1"]
+    )
+
+    assert result.exit_code == 1
+    assert result.exception is not None
+    assert "Issue #0001 is already closed" in str(result.exception)
+    assert len(events_path.read_text(encoding="utf-8").splitlines()) == before
+
+
+def test_decision_supersede_requires_decision_target(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    runner.invoke(app, ["init"], catch_exceptions=False)
+    runner.invoke(app, ["log", "issue target"], catch_exceptions=False)
+    events_path = tmp_path / ".projectmem" / "events.jsonl"
+    issue_event_id = json.loads(
+        events_path.read_text(encoding="utf-8").splitlines()[0]
+    )["id"]
+    before = len(events_path.read_text(encoding="utf-8").splitlines())
+
+    result = runner.invoke(
+        app,
+        ["decision", "invalid supersede", "--supersedes", issue_event_id],
+    )
+
+    assert result.exit_code == 1
+    assert result.exception is not None
+    assert "only decision events can be superseded" in result.output
+    assert len(events_path.read_text(encoding="utf-8").splitlines()) == before

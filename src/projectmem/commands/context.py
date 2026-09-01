@@ -16,23 +16,142 @@ from __future__ import annotations
 import json
 import subprocess
 from collections import defaultdict
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import typer
 
-from projectmem.models import Event
+try:
+    import tiktoken
+except ImportError:  # pragma: no cover - exercised in minimal installations
+    tiktoken = None  # type: ignore[assignment]
+
+from projectmem.models import Event, superseded_ids
 from projectmem.storage import (
+    project_map_path,
     read_events,
     require_mem_dir,
-    summary_path,
-    project_map_path,
 )
 
+# ``cl100k_base`` is a stable, model-independent OpenAI encoding.  It is a
+# declared dependency and is used for budgeting only; the returned metadata
+# makes clear that this is not a claim about every provider's tokenizer.
+TOKENIZER_ENCODING = "cl100k_base"
+TOKENIZER_NAME = f"tiktoken/{TOKENIZER_ENCODING}"
+# Section builders use this only as a cheap sizing heuristic.  It is never
+# reported as a token count and the final assembly is checked by tiktoken.
+_SECTION_CHAR_HEURISTIC = 4
+DEFAULT_TOKEN_BUDGET = 2000
+MIN_TOKEN_BUDGET = 100
+MAX_TOKEN_BUDGET = 20000
 
-# ── Token estimation (rough: ~4 chars per token) ──
-CHARS_PER_TOKEN = 4
+# Canonical project setting for the default context budget.  Keep parsing
+# dependency-free because projectmem supports Python 3.10, whose stdlib does
+# not include ``tomllib``.
+_TOKEN_CONFIG_KEY = "context_token_budget"
+
+
+class ContextTokenizerUnavailable(RuntimeError):
+    """Raised when the configured tokenizer cannot be loaded or used."""
+
+
+@lru_cache(maxsize=1)
+def _get_context_encoding() -> Any:
+    """Load the one supported context encoding, without an estimate fallback."""
+    if tiktoken is None:
+        raise ContextTokenizerUnavailable(
+            "Context tokenization unavailable: install the `tiktoken` dependency "
+            f"to load {TOKENIZER_ENCODING}."
+        )
+    try:
+        return tiktoken.get_encoding(TOKENIZER_ENCODING)
+    except Exception as exc:  # encoding data may be unavailable offline
+        raise ContextTokenizerUnavailable(
+            f"Context tokenization unavailable: could not load "
+            f"tiktoken encoding {TOKENIZER_ENCODING}: {exc}"
+        ) from exc
+
+
+def _encode_context(text: str, encoding: Any | None = None) -> list[int]:
+    """Encode context text and convert dependency failures into clear errors."""
+    encoder = encoding if encoding is not None else _get_context_encoding()
+    try:
+        # Context is generated text, so special-looking markers are ordinary
+        # content rather than control tokens.
+        return encoder.encode(text, disallowed_special=())
+    except Exception as exc:
+        raise ContextTokenizerUnavailable(
+            f"Context tokenization unavailable: failed to encode text with "
+            f"tiktoken/{TOKENIZER_ENCODING}: {exc}"
+        ) from exc
+
+
+def count_context_tokens(text: str) -> int:
+    """Return the exact token count under the supported context encoding."""
+    return len(_encode_context(text))
+
+
+def _truncate_to_token_budget(
+    text: str, token_budget: int, encoding: Any | None = None
+) -> tuple[str, int]:
+    """Truncate text and return ``(text, exact_token_count)`` within a budget."""
+    encoder = encoding if encoding is not None else _get_context_encoding()
+    token_ids = _encode_context(text, encoder)
+    if len(token_ids) <= token_budget:
+        return text, len(token_ids)
+
+    # Decode a token prefix instead of slicing characters.  This keeps the
+    # budget in the tokenizer's units and handles CJK, combining characters,
+    # and emoji consistently with the declared encoding.
+    try:
+        prefix = encoder.decode(token_ids[:token_budget])
+    except Exception as exc:
+        raise ContextTokenizerUnavailable(
+            f"Context tokenization unavailable: failed to decode the "
+            f"{TOKENIZER_ENCODING} token prefix: {exc}"
+        ) from exc
+    used = len(_encode_context(prefix, encoder))
+
+    # Most BPE prefixes round-trip exactly.  Keep a character-boundary safety
+    # path for encodings that decode a partial UTF-8 token into replacement
+    # characters whose re-encoding could consume more tokens.
+    if used > token_budget:
+        low, high = 0, len(prefix)
+        best = ""
+        best_used = 0
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = prefix[:mid]
+            candidate_used = len(_encode_context(candidate, encoder))
+            if candidate_used <= token_budget:
+                best, best_used = candidate, candidate_used
+                low = mid + 1
+            else:
+                high = mid - 1
+        prefix, used = best, best_used
+
+    # Make truncation observable where the marker itself fits.  Re-check the
+    # complete string: the marker is content and therefore part of the cap.
+    marker = "…"
+    if prefix and prefix != text:
+        marker_tokens = len(_encode_context(marker, encoder))
+        if marker_tokens < token_budget:
+            available = token_budget - marker_tokens
+            try:
+                marked_prefix = (
+                    encoder.decode(token_ids[:available]).rstrip() + marker
+                )
+            except Exception as exc:
+                raise ContextTokenizerUnavailable(
+                    f"Context tokenization unavailable: failed to decode the "
+                    f"{TOKENIZER_ENCODING} truncation marker: {exc}"
+                ) from exc
+            marked_used = len(_encode_context(marked_prefix, encoder))
+            if marked_used <= token_budget:
+                prefix, used = marked_prefix, marked_used
+    return prefix, used
 
 # ── Scoring weights ──
 TYPE_BASE_SCORES = {
@@ -89,27 +208,111 @@ def _is_backfill_event(event: Event) -> bool:
     return False
 
 
+def _read_context_config(root: Path | None = None) -> dict[str, Any]:
+    """Read optional context settings from the project's config file.
+
+    Configuration is a convenience default, not a second source of events.
+    A missing or malformed config therefore leaves the normal defaults in
+    place; callers still validate any value that is actually selected.
+    """
+    root_path = root or Path.cwd()
+    config_path = root_path / ".projectmem" / "config.toml"
+    if not config_path.is_file():
+        return {}
+    try:
+        lines = config_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+
+    # The project config written by ``pjm init`` is deliberately flat.  Parse
+    # only the scalar settings this command owns instead of adding a TOML
+    # dependency merely to read one integer.
+    data: dict[str, Any] = {}
+    for line in lines:
+        stripped = line.split("#", 1)[0].strip()
+        if "=" not in stripped:
+            continue
+        key, value = (part.strip() for part in stripped.split("=", 1))
+        if key != _TOKEN_CONFIG_KEY:
+            continue
+        data[key] = value.strip().strip('"').strip("'")
+    return data
+
+
+def configured_token_budget(root: Path | None = None) -> int | None:
+    """Return a valid configured context budget, if one is present."""
+    config = _read_context_config(root)
+    value = config.get(_TOKEN_CONFIG_KEY)
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        budget = int(value)
+    except (TypeError, ValueError):
+        return None
+    if MIN_TOKEN_BUDGET <= budget <= MAX_TOKEN_BUDGET:
+        return budget
+    return None
+
+
+def resolve_token_budget(
+    requested: int | None = None,
+    root: Path | None = None,
+    *,
+    use_config: bool = True,
+) -> int:
+    """Resolve and validate a context budget for CLI/MCP entry points."""
+    budget = requested
+    if budget is None and use_config:
+        budget = configured_token_budget(root)
+    if budget is None:
+        budget = DEFAULT_TOKEN_BUDGET
+    if not isinstance(budget, int) or isinstance(budget, bool):
+        raise ValueError("Context token budget must be an integer.")
+    if not MIN_TOKEN_BUDGET <= budget <= MAX_TOKEN_BUDGET:
+        raise ValueError(
+            f"Context token budget must be between {MIN_TOKEN_BUDGET} and "
+            f"{MAX_TOKEN_BUDGET} tokens."
+        )
+    return budget
+
+
 def generate_context(
     events: list[Event],
-    token_budget: int = 2000,
+    token_budget: int | None = None,
     focus: str | None = None,
     recent_days: int = 30,
     root: Path | None = None,
+    *,
+    use_config: bool = True,
 ) -> dict[str, Any]:
     """Generate compressed context within a token budget.
 
-    Returns dict with 'markdown', 'tokens_used', 'events_included', etc.
+    Returns dict with markdown, exact token accounting, and selection metadata.
     """
     root_path = root or Path.cwd()
+    # Resolve here as well as at the CLI/wrap/MCP boundaries so direct Python
+    # callers share the same config/override contract.  Passing an explicit
+    # integer always wins over the project default.
+    token_budget = resolve_token_budget(
+        token_budget, root_path, use_config=use_config
+    )
+    encoding = _get_context_encoding()
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=recent_days)
 
     # ── Gather context signals ──
     git_files = _get_git_status_files(root_path)
 
+    # Superseded decisions remain in the append-only log for auditability but
+    # must not be injected into a live agent context.  This mirrors summary
+    # and export, which already expose only current decisions.
+    retired = superseded_ids(events)
+
     # ── Score and filter events ──
     scored: list[tuple[float, Event]] = []
     for event in events:
+        if event.id in retired:
+            continue
         score = _score_event(event, now, cutoff, focus, git_files)
         if score > 0:
             scored.append((score, event))
@@ -128,12 +331,17 @@ def generate_context(
         level = "emergency"
 
     # ── Build sections ──
-    char_budget = token_budget * CHARS_PER_TOKEN
+    # Character sizing is only used to avoid asking section builders to do
+    # excessive work.  It is deliberately not used for accounting.
+    char_budget = token_budget * _SECTION_CHAR_HEURISTIC
     sections: list[str] = []
     chars_used = 0
 
     # Header
-    header = f"## projectmem context (budget: {token_budget} tokens)\n"
+    header = (
+        f"## projectmem context (budget: {token_budget} tokens; "
+        f"encoding: {TOKENIZER_NAME})\n"
+    )
     chars_used += len(header)
     sections.append(header)
 
@@ -171,18 +379,18 @@ def generate_context(
             chars_used += len(arch)
             sections.append(arch)
 
-    markdown = "\n".join(sections)
-    tokens_used = len(markdown) // CHARS_PER_TOKEN
-    events_included = sum(
-        1
-        for _, e in scored
-        if any(e.summary in s for s in sections)
+    # Section builders intentionally optimize relevance and may produce a
+    # warning block larger than the remaining budget.  Enforce the contract
+    # at the final assembly boundary so every caller receives a hard cap.
+    markdown, tokens_used = _truncate_to_token_budget(
+        "\n".join(sections), token_budget, encoding
     )
-
     return {
         "markdown": markdown,
         "tokens_used": tokens_used,
         "token_budget": token_budget,
+        "tokenizer": TOKENIZER_NAME,
+        "token_count_method": "exact",
         "compression_level": level,
         "events_scored": len(scored),
         "events_total": len(events),
@@ -461,7 +669,7 @@ def _age_label(timestamp: str) -> str:
 
 
 def run(
-    tokens: int = 2000,
+    tokens: int | None = None,
     focus: str | None = None,
     recent: str | None = None,
     fmt: str = "md",
@@ -470,6 +678,10 @@ def run(
     """Generate and print context within token budget."""
     require_mem_dir(root)
     events = read_events(root)
+
+    effective_tokens = resolve_token_budget(
+        tokens, root, use_config=tokens is None
+    )
 
     # Parse --recent
     recent_days = 30
@@ -486,10 +698,11 @@ def run(
 
     result = generate_context(
         events,
-        token_budget=tokens,
+        token_budget=effective_tokens,
         focus=focus,
         recent_days=recent_days,
         root=root,
+        use_config=False,
     )
 
     if fmt == "json":

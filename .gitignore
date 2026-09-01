@@ -110,3 +110,16 @@ poster resource /
 *.out
 *.bbl
 *.blg
+
+.projectmem/events.jsonl
+.projectmem/summary.index.json
+.projectmem/events.state.json
+.projectmem/search.sqlite3
+.projectmem/search.sqlite3-journal
+.projectmem/search.sqlite3-wal
+.projectmem/search.sqlite3-shm
+.projectmem/.search.sqlite3.*.tmp
+.projectmem/.transaction.lock
+.projectmem/watch.pid
+.projectmem/watch.log
+.projectmem/structure.json

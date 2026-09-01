@@ -8,18 +8,62 @@ Global memory is 100% local — nothing leaves the machine.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import tiktoken
 
 # ── Paths ──
 GLOBAL_DIR = Path.home() / ".projectmem" / "global"
 PATTERNS_FILE = "patterns.jsonl"
 GOTCHAS_FILE = "library_gotchas.jsonl"
 PREFERENCES_FILE = "stack_preferences.md"
+GLOBAL_MEMORY_LOCK_FILE = ".global-memory.lock"
+
+# Inherited entries are part of the mandatory session-start instructions, so
+# their payload must stay tiny. Full cross-project history remains local and
+# is retrieved on demand through get_global_gotchas().
+INHERITED_MEMORY_TOKEN_BUDGET = 360
+INHERITED_GOTCHA_PREVIEW_LIMIT = 5
+INHERITED_PATTERN_PREVIEW_LIMIT = 2
+
+
+class StackInfo(dict[str, Any]):
+    """Stack mapping with non-serialized project metadata.
+
+    ``pjm init`` passes the result to ``get_relevant_entries`` immediately
+    after detection. Keeping the project root and its global-memory setting as
+    attributes lets that function honor a persisted opt-out without changing
+    the public JSON shape of ``pjm global detect --format json``.
+    """
+
+    def __init__(
+        self,
+        values: dict[str, Any],
+        *,
+        project_root: Path | None = None,
+        global_enabled: bool = True,
+    ) -> None:
+        super().__init__(values)
+        self.project_root = project_root
+        self.global_enabled = global_enabled
+
+
+def _project_global_memory_enabled(root: Path) -> bool:
+    """Read a project's opt-out without importing storage at module load."""
+    try:
+        from projectmem.storage import global_memory_enabled
+
+        return global_memory_enabled(root)
+    except Exception:
+        # Stack detection predates the project setting; unreadable project
+        # configuration keeps the historical opt-in behavior.
+        return True
 
 
 def global_dir() -> Path:
@@ -38,6 +82,20 @@ def gotchas_path() -> Path:
 
 def preferences_path() -> Path:
     return global_dir() / PREFERENCES_FILE
+
+
+def _global_memory_lock_path() -> Path:
+    """Return the lock that serializes global-memory read/modify/write flows."""
+    return global_dir() / GLOBAL_MEMORY_LOCK_FILE
+
+
+def _with_global_memory_lock():
+    """Use the registry's re-entrant cross-process file lock for global data."""
+    # Keep this import lazy: storage imports global_memory during event writes,
+    # while project_registry deliberately stays independent from storage.
+    from projectmem.project_registry import global_file_lock
+
+    return global_file_lock(_global_memory_lock_path())
 
 
 # ══════════════════════════════════════════
@@ -135,20 +193,27 @@ def detect_stack(root: Path) -> dict[str, Any]:
                 frameworks.add(fw)
                 tags.add(fw)
 
-    result = {
-        "tags": sorted(tags),
-        "libraries": sorted(libraries),
-        "frameworks": sorted(frameworks),
-        "manifest_files": manifest_files,
-    }
+    project_root = root.resolve()
+    global_enabled = _project_global_memory_enabled(project_root)
+    result = StackInfo(
+        {
+            "tags": sorted(tags),
+            "libraries": sorted(libraries),
+            "frameworks": sorted(frameworks),
+            "manifest_files": manifest_files,
+        },
+        project_root=project_root,
+        global_enabled=global_enabled,
+    )
 
     # Self-curating promotable set (L-045): every library this project declares
     # becomes eligible for cross-project promotion machine-wide. Best-effort —
     # cache failures must not break stack detection.
-    try:
-        record_promotable_libraries(result["libraries"] + result["tags"])
-    except Exception:
-        pass
+    if global_enabled:
+        try:
+            record_promotable_libraries(result["libraries"] + result["tags"])
+        except Exception:
+            pass
 
     return result
 
@@ -318,18 +383,36 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _write_jsonl(path: Path, entries: list[dict[str, Any]]) -> None:
-    """Write a list of dicts to a JSONL file."""
+    """Atomically write a list of dicts to a JSONL file.
+
+    The caller owns the global-memory lock when replacing an existing file;
+    atomic replacement makes concurrent readers see either complete version.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        for entry in entries:
-            f.write(json.dumps(entry, sort_keys=True) + "\n")
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            for entry in entries:
+                handle.write(json.dumps(entry, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except OSError:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _append_jsonl(path: Path, entry: dict[str, Any]) -> None:
     """Append a single entry to a JSONL file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, sort_keys=True) + "\n")
+    with _with_global_memory_lock():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, sort_keys=True) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
 
 
 def read_patterns() -> list[dict[str, Any]]:
@@ -383,13 +466,14 @@ def add_gotcha(
 
 def remove_entry(entry_id: str) -> bool:
     """Remove a pattern or gotcha by ID."""
-    for path in (patterns_path(), gotchas_path()):
-        entries = _read_jsonl(path)
-        original_len = len(entries)
-        entries = [e for e in entries if e.get("id") != entry_id]
-        if len(entries) < original_len:
-            _write_jsonl(path, entries)
-            return True
+    with _with_global_memory_lock():
+        for path in (patterns_path(), gotchas_path()):
+            entries = _read_jsonl(path)
+            original_len = len(entries)
+            entries = [e for e in entries if e.get("id") != entry_id]
+            if len(entries) < original_len:
+                _write_jsonl(path, entries)
+                return True
     return False
 
 
@@ -400,28 +484,29 @@ def prune_entries(
     cutoff = datetime.now(timezone.utc).timestamp() - (older_than_days * 86400)
     removed = 0
 
-    for path in (patterns_path(), gotchas_path()):
-        entries = _read_jsonl(path)
-        original_len = len(entries)
-        filtered = []
-        for e in entries:
-            ts_field = e.get("created") or e.get("discovered") or ""
-            try:
-                entry_ts = datetime.fromisoformat(
-                    ts_field.replace("Z", "+00:00")
-                ).timestamp()
-            except (ValueError, AttributeError):
-                entry_ts = 0
+    with _with_global_memory_lock():
+        for path in (patterns_path(), gotchas_path()):
+            entries = _read_jsonl(path)
+            original_len = len(entries)
+            filtered = []
+            for e in entries:
+                ts_field = e.get("created") or e.get("discovered") or ""
+                try:
+                    entry_ts = datetime.fromisoformat(
+                        ts_field.replace("Z", "+00:00")
+                    ).timestamp()
+                except (ValueError, AttributeError):
+                    entry_ts = 0
 
-            # Remove if old AND (no confidence filter or matches confidence)
-            if entry_ts < cutoff:
-                if confidence is None or e.get("confidence") == confidence:
-                    removed += 1
-                    continue
-            filtered.append(e)
+                # Remove if old AND (no confidence filter or matches confidence)
+                if entry_ts < cutoff:
+                    if confidence is None or e.get("confidence") == confidence:
+                        removed += 1
+                        continue
+                filtered.append(e)
 
-        if len(filtered) < original_len:
-            _write_jsonl(path, filtered)
+            if len(filtered) < original_len:
+                _write_jsonl(path, filtered)
 
     return removed
 
@@ -443,6 +528,9 @@ def get_relevant_entries(
             "gotchas": [...],
         }
     """
+    if isinstance(stack, StackInfo) and not stack.global_enabled:
+        return {"patterns": [], "gotchas": []}
+
     project_tags = set(stack.get("tags", []))
     project_libs = set(stack.get("libraries", []))
 
@@ -471,10 +559,35 @@ def get_relevant_entries(
     }
 
 
+def _entry_recency(entry: dict[str, Any]) -> str:
+    """Return an ISO-sortable recency value for a global-memory entry."""
+    value = entry.get("discovered") or entry.get("created") or ""
+    return value if isinstance(value, str) else ""
+
+
+def _fits_inherited_budget(lines: list[str], candidate: str, *, token_budget: int) -> bool:
+    """Return whether adding one preview line keeps the section token-bounded."""
+    encoding = tiktoken.get_encoding("cl100k_base")
+    rendered = "\n".join([*lines, candidate])
+    return len(encoding.encode(rendered)) <= token_budget
+
+
 def build_inherited_instructions(
-    relevant: dict[str, list[dict[str, Any]]]
+    relevant: dict[str, list[dict[str, Any]]],
+    *,
+    token_budget: int = INHERITED_MEMORY_TOKEN_BUDGET,
 ) -> str:
-    """Build markdown section for AI_INSTRUCTIONS.md from global memory."""
+    """Build a bounded global-memory preview for ``AI_INSTRUCTIONS.md``.
+
+    ``AI_INSTRUCTIONS.md`` is loaded at every session start. Keeping all
+    matching global entries there turns a local retrieval cache into an
+    uncontrolled model-context cost. The full entries remain in global memory;
+    the MCP ``get_global_gotchas(project_id, library)`` tool retrieves them
+    only when a task touches that library.
+    """
+    if token_budget <= 0:
+        raise ValueError("token_budget must be positive")
+
     patterns = relevant.get("patterns", [])
     gotchas = relevant.get("gotchas", [])
 
@@ -483,30 +596,49 @@ def build_inherited_instructions(
 
     lines = [
         "## Global Memory — Inherited Knowledge\n",
-        "The following patterns and gotchas were inherited from your global memory",
-        "(~/.projectmem/global/). They represent lessons learned from other projects.\n",
+        "Global history stays local and is retrieved on demand instead of being",
+        "fully injected into every AI session.\n",
+        f"Relevant now: {len(gotchas)} library gotchas and {len(patterns)} patterns.",
+        "Use `get_global_gotchas(project_id, library)` for a library you are",
+        "about to change; the legacy single-project MCP omits `project_id`.\n",
     ]
 
     if gotchas:
-        lines.append("### Library Gotchas\n")
-        for g in gotchas:
+        lines.append("### Recent library-gotcha preview\n")
+        shown = 0
+        for g in sorted(gotchas, key=_entry_recency, reverse=True):
+            if shown >= INHERITED_GOTCHA_PREVIEW_LIMIT:
+                break
             lib = g.get("library", "unknown")
             gotcha = g.get("gotcha", "")
             source = g.get("source_project", "")
             source_str = f" (from {source})" if source else ""
             version = g.get("version_range", "")
             version_str = f" [{version}]" if version else ""
-            lines.append(f"- **{lib}**{version_str}: {gotcha}{source_str}")
-        lines.append("")
+            candidate = f"- **{lib}**{version_str}: {gotcha}{source_str}"
+            if not _fits_inherited_budget(lines, candidate, token_budget=token_budget):
+                continue
+            lines.append(candidate)
+            shown += 1
+        if shown:
+            lines.append("")
 
     if patterns:
-        lines.append("### Cross-Project Patterns\n")
-        for p in patterns:
+        lines.append("### Cross-project pattern preview\n")
+        shown = 0
+        for p in sorted(patterns, key=_entry_recency, reverse=True):
+            if shown >= INHERITED_PATTERN_PREVIEW_LIMIT:
+                break
             pattern = p.get("pattern", "")
             source = p.get("source_project", "")
             source_str = f" (from {source})" if source else ""
-            lines.append(f"- {pattern}{source_str}")
-        lines.append("")
+            candidate = f"- {pattern}{source_str}"
+            if not _fits_inherited_budget(lines, candidate, token_budget=token_budget):
+                continue
+            lines.append(candidate)
+            shown += 1
+        if shown:
+            lines.append("")
 
     return "\n".join(lines)
 
@@ -539,34 +671,35 @@ def import_all(data: dict[str, Any], merge: bool = True) -> dict[str, int]:
 
     Returns counts of imported entries.
     """
-    if not merge:
-        _write_jsonl(patterns_path(), data.get("patterns", []))
-        _write_jsonl(gotchas_path(), data.get("gotchas", []))
-        if data.get("preferences"):
+    with _with_global_memory_lock():
+        if not merge:
+            _write_jsonl(patterns_path(), data.get("patterns", []))
+            _write_jsonl(gotchas_path(), data.get("gotchas", []))
+            if data.get("preferences"):
+                preferences_path().write_text(data["preferences"], encoding="utf-8")
+            return {
+                "patterns": len(data.get("patterns", [])),
+                "gotchas": len(data.get("gotchas", [])),
+            }
+
+        # Merge mode — skip duplicates by ID
+        existing_pattern_ids = {p["id"] for p in read_patterns()}
+        existing_gotcha_ids = {g["id"] for g in read_gotchas()}
+
+        new_patterns = 0
+        for p in data.get("patterns", []):
+            if p.get("id") not in existing_pattern_ids:
+                _append_jsonl(patterns_path(), p)
+                new_patterns += 1
+
+        new_gotchas = 0
+        for g in data.get("gotchas", []):
+            if g.get("id") not in existing_gotcha_ids:
+                _append_jsonl(gotchas_path(), g)
+                new_gotchas += 1
+
+        if data.get("preferences") and not preferences_path().exists():
             preferences_path().write_text(data["preferences"], encoding="utf-8")
-        return {
-            "patterns": len(data.get("patterns", [])),
-            "gotchas": len(data.get("gotchas", [])),
-        }
-
-    # Merge mode — skip duplicates by ID
-    existing_pattern_ids = {p["id"] for p in read_patterns()}
-    existing_gotcha_ids = {g["id"] for g in read_gotchas()}
-
-    new_patterns = 0
-    for p in data.get("patterns", []):
-        if p.get("id") not in existing_pattern_ids:
-            _append_jsonl(patterns_path(), p)
-            new_patterns += 1
-
-    new_gotchas = 0
-    for g in data.get("gotchas", []):
-        if g.get("id") not in existing_gotcha_ids:
-            _append_jsonl(gotchas_path(), g)
-            new_gotchas += 1
-
-    if data.get("preferences") and not preferences_path().exists():
-        preferences_path().write_text(data["preferences"], encoding="utf-8")
 
     return {"patterns": new_patterns, "gotchas": new_gotchas}
 
@@ -632,16 +765,15 @@ def record_promotable_libraries(libraries: list[str]) -> None:
     new = {lib.lower() for lib in libraries if isinstance(lib, str) and lib}
     if not new:
         return
-    existing = load_promotable_set()
-    if new.issubset(existing):
-        return
-    merged = sorted(existing | new)
-    path = promotable_cache_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"libraries": merged}, sort_keys=True, indent=2),
-        encoding="utf-8",
-    )
+    with _with_global_memory_lock():
+        existing = load_promotable_set()
+        if new.issubset(existing):
+            return
+        merged = sorted(existing | new)
+        _write_jsonl(
+            promotable_cache_path(),
+            [{"libraries": merged}],
+        )
 
 
 # Signal prefixes that mark a decision / note as a deliberate cross-project
@@ -758,17 +890,19 @@ def auto_promote_event(
     # if both ever overlapped). Sorted iteration above makes ties deterministic.
     lib = max(matched_libs, key=len)
 
-    # Skip duplicates already in the store
-    for g in read_gotchas():
-        if g.get("library") == lib and _similar(g.get("gotcha", ""), event_summary):
-            return None
+    # The duplicate read and append are one cross-project transaction. Without
+    # this, two different project locks can promote the same gotcha at once.
+    with _with_global_memory_lock():
+        for g in read_gotchas():
+            if g.get("library") == lib and _similar(g.get("gotcha", ""), event_summary):
+                return None
 
-    return add_gotcha(
-        library=lib,
-        gotcha=event_summary,
-        tags=tags or [],
-        source_project=project_name,
-    )
+        return add_gotcha(
+            library=lib,
+            gotcha=event_summary,
+            tags=tags or [],
+            source_project=project_name,
+        )
 
 
 def _similar(a: str, b: str) -> bool:

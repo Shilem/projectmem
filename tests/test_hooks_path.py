@@ -48,6 +48,8 @@ def test_precheck_snippet_bakes_path_into_script(tmp_path: Path) -> None:
     assert HOOK_MARKER_END in snippet
     # The runtime fallback is there too.
     assert "command -v pjm" in snippet
+    # Warnings exit zero at --level warn, so do not hide real storage failures.
+    assert "|| true" not in snippet
 
 
 def test_auto_capture_snippet_bakes_path_and_capture_arg() -> None:

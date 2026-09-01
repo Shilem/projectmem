@@ -20,7 +20,8 @@ keywords = [
 ]
 dependencies = [
   "typer>=0.12",
-  "mcp>=0.1.0",
+  "mcp>=0.1.0,<2",
+  "tiktoken>=0.7,<1",
   "watchdog>=4.0",
 ]
 classifiers = [
@@ -53,6 +54,7 @@ Paper = "https://arxiv.org/abs/2606.12329"
 projectmem = "projectmem.cli:main"
 pjm = "projectmem.cli:main"
 pjm-mcp = "projectmem.mcp_server:main"
+pjm-mcp-global = "projectmem.mcp_global_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/projectmem"]

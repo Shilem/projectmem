@@ -171,8 +171,9 @@ def run(
     """Run the pre-commit check."""
     root_path = root or Path.cwd()
 
-    # Guard: only run if .projectmem exists
-    if not (root_path / MEM_DIR).exists():
+    # Guard: only run if .projectmem exists.  A project without memory has no
+    # safety signal yet, so the hook remains opt-in and quiet in that case.
+    if not (root_path / MEM_DIR).is_dir():
         return
 
     # Snooze management actions short-circuit the check itself.
@@ -218,11 +219,20 @@ def run(
             _safe_echo("projectmem: No files to check.")
         return
 
-    # Read events and build warnings
+    # Read events and build warnings.  A malformed events.jsonl means the
+    # safety signal is unavailable; returning success would falsely imply the
+    # staged change was checked.  Surface the corruption and fail explicitly,
+    # while ordinary warning results below remain non-blocking at --level warn.
     try:
         events = read_events(root_path)
-    except Exception:
-        return  # Silent if memory can't be read
+    except Exception as exc:
+        _safe_echo(
+            "projectmem: memory unavailable or corrupt; precheck could not "
+            f"read {root_path / MEM_DIR / 'events.jsonl'}: "
+            f"{type(exc).__name__}: {exc}",
+            err=True,
+        )
+        raise typer.Exit(1)
 
     warnings = _analyze_files(target_files, events, root=root_path)
 

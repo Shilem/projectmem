@@ -6,7 +6,7 @@ from pathlib import Path
 import typer
 
 from projectmem.models import Event, normalize_timestamp
-from projectmem.storage import append_event, read_events
+from projectmem.storage import append_event, project_transaction, read_events
 from projectmem.summary import regenerate_summary
 
 
@@ -31,63 +31,69 @@ def run(limit: int = 20, root: Path | None = None) -> None:
         typer.echo("No git history found.")
         return
 
-    # 2. Parse and create events
-    existing_events = read_events(root)
-    existing_commits = {e.git_commit for e in existing_events if e.git_commit}
-    
     new_count = 0
-    for line in reversed(lines): # Start from oldest
-        parts = line.split("|")
-        if len(parts) < 4:
-            continue
-            
-        commit_hash, message, author, date = parts
-        
-        if commit_hash in existing_commits:
-            continue
-            
-        # Infer type
-        msg_lower = message.lower()
-        event_type = "note"
-        outcome = None
-        issue_id = None
-        
-        if any(kw in msg_lower for kw in ["fix", "resolve", "close", "bug", "issue"]):
-            event_type = "fix"
-            # Create a pseudo-issue for this fix
-            issue_id = f"legacy_{commit_hash[:4]}"
-            issue_event = Event(
-                type="issue",
+    # Keep the duplicate check, append sequence, and one derived-file rebuild
+    # in the same transaction. Git output was collected above and is immutable.
+    with project_transaction(root) as project_root:
+        existing_events = read_events(project_root)
+        existing_commits = {e.git_commit for e in existing_events if e.git_commit}
+
+        for line in reversed(lines):  # Start from oldest
+            parts = line.split("|")
+            if len(parts) < 4:
+                continue
+
+            commit_hash, message, author, date = parts
+
+            if commit_hash in existing_commits:
+                continue
+
+            # Infer type
+            msg_lower = message.lower()
+            event_type = "note"
+            outcome = None
+            issue_id = None
+
+            if any(
+                kw in msg_lower
+                for kw in ["fix", "resolve", "close", "bug", "issue"]
+            ):
+                event_type = "fix"
+                # Create a pseudo-issue for this fix.
+                issue_id = f"legacy_{commit_hash[:4]}"
+                issue_event = Event(
+                    type="issue",
+                    issue_id=issue_id,
+                    summary=f"Legacy issue: {message}",
+                    timestamp=normalize_timestamp(date),
+                    git_commit=commit_hash,
+                    notes="Created during backfill",
+                )
+                append_event(issue_event, project_root)
+            elif "revert" in msg_lower:
+                event_type = "attempt"
+                outcome = "failed"
+
+            files = get_commit_files(commit_hash, root_path)
+            event = Event(
+                type=event_type,
                 issue_id=issue_id,
-                summary=f"Legacy issue: {message}",
+                summary=message,
                 timestamp=normalize_timestamp(date),
+                outcome=outcome,
+                files=files,
                 git_commit=commit_hash,
-                notes="Created during backfill"
+                notes=f"Auto-backfilled from git commit by {author}",
             )
-            append_event(issue_event, root)
-        elif "revert" in msg_lower:
-            event_type = "attempt"
-            outcome = "failed"
-        
-        # Get files
-        files = get_commit_files(commit_hash, root_path)
-        
-        event = Event(
-            type=event_type,
-            issue_id=issue_id,
-            summary=message,
-            timestamp=normalize_timestamp(date),
-            outcome=outcome,
-            files=files,
-            git_commit=commit_hash,
-            notes=f"Auto-backfilled from git commit by {author}"
-        )
-        
-        append_event(event, root)
-        new_count += 1
+
+            append_event(event, project_root)
+            existing_commits.add(commit_hash)
+            new_count += 1
+
+        if new_count > 0:
+            regenerate_summary(project_root)
 
     if new_count > 0:
-        regenerate_summary(root)
         typer.echo(f"Backfilled {new_count} events from git history.")
     else:
         typer.echo("No new events to backfill.")

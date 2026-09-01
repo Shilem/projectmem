@@ -38,7 +38,7 @@ projectmem is open source and we'd rather be transparent about the trade-offs th
 
 6. **Memory files are AI instructions — treat like code.** AI agents read `AI_INSTRUCTIONS.md`, `PROJECT_MAP.md`, and `summary.md` as authoritative guidance. Malicious prompt-injection text in those files can manipulate AI behavior. Review changes like you'd review code.
 
-7. **The MCP server is local-only.** `pjm-mcp` listens on stdio, not over the network. No remote attack surface — but any local AI client you connect can write to your memory via the 8 MCP tools.
+7. **The MCP servers are local-only.** `pjm-mcp` and `pjm-mcp-global` use stdio, not the network. The global server routes only by registered `project_id` and never exposes project roots in its project list. Any local AI client you connect can still write to the project memory for an ID it is allowed to invoke.
 
 ## Fully Uninstall
 
@@ -54,10 +54,10 @@ pip uninstall projectmem  # 5. uninstall the package
 
 The following are **in scope** for security reports:
 
-- Code execution vulnerabilities in `pjm` CLI or `pjm-mcp` server
+- Code execution vulnerabilities in `pjm`, `pjm-mcp`, or `pjm-mcp-global`
 - Information disclosure beyond what's documented in the trade-offs above
 - Privilege escalation via git hooks
-- Malicious-package risks via dependency chain (we use only `typer`, `mcp`, `watchdog`)
+- Malicious-package risks via dependency chain (we use `typer`, `mcp`, `tiktoken`, and `watchdog`)
 
 The following are **not** security issues (by design):
 

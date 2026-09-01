@@ -15,6 +15,7 @@ signal of all).
 from __future__ import annotations
 
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 from projectmem.models import Event, superseded_ids
@@ -64,6 +65,51 @@ def commits_touching_since(
     return sum(1 for line in result.stdout.splitlines() if line.strip())
 
 
+def _parse_timestamp(timestamp: str) -> datetime | None:
+    """Parse an event/commit timestamp into an aware UTC datetime."""
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _commit_timestamps_touching(
+    file_path: str, since_iso: str, root: Path
+) -> list[datetime] | None:
+    """Read commit timestamps for one file with one Git subprocess.
+
+    ``find_stale_events`` may need counts relative to several event dates for
+    the same file.  Fetching timestamps once lets it calculate each count in
+    memory while preserving the original per-event ``--since`` semantics.
+    ``None`` means Git could not provide a trustworthy result.
+    """
+    if _parse_timestamp(since_iso) is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "log", f"--since={since_iso}", "--format=%cI", "--", file_path],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    timestamps = [parsed for line in lines if (parsed := _parse_timestamp(line))]
+    # A non-empty response that contains no parseable timestamps is not a
+    # trustworthy zero; report it as unavailable rather than hiding staleness.
+    if lines and not timestamps:
+        return None
+    return timestamps
+
+
 def find_stale_events(
     events: list[Event],
     root: Path | None = None,
@@ -79,9 +125,9 @@ def find_stale_events(
     root_path = root or Path.cwd()
     retired = superseded_ids(events)
     flagged: list[dict] = []
-    # Memoize git calls per (file, timestamp) — many events share a file.
-    counts: dict[tuple[str, str], int | None] = {}
-
+    # Group live events by file.  Git is queried once per file; event-specific
+    # counts are derived from the returned commit timestamps below.
+    by_file: dict[str, list[tuple[Event, datetime]]] = {}
     for event in events:
         if event.type not in _STALE_CHECKED_TYPES or event.id in retired:
             continue
@@ -91,12 +137,27 @@ def find_stale_events(
         if not (root_path / file_path).exists():
             flagged.append({"event": event, "file": file_path, "commits_since": -1})
             continue
-        key = (file_path, event.timestamp)
-        if key not in counts:
-            counts[key] = commits_touching_since(file_path, event.timestamp, root_path)
-        count = counts[key]
-        if count is not None and count >= threshold:
-            flagged.append({"event": event, "file": file_path, "commits_since": count})
+
+        event_timestamp = _parse_timestamp(event.timestamp)
+        if event_timestamp is None:
+            # The old helper would return None when Git rejected an invalid
+            # --since value; retain that cannot-judge behavior.
+            continue
+        by_file.setdefault(file_path, []).append((event, event_timestamp))
+
+    for file_path, file_events in by_file.items():
+        oldest = min(timestamp for _, timestamp in file_events)
+        commit_timestamps = _commit_timestamps_touching(
+            file_path, oldest.isoformat(), root_path
+        )
+        if commit_timestamps is None:
+            continue
+        for event, event_timestamp in file_events:
+            # Git's --since means newer than the boundary.  Use the same
+            # strict comparison when deriving each event's count.
+            count = sum(commit_timestamp > event_timestamp for commit_timestamp in commit_timestamps)
+            if count >= threshold:
+                flagged.append({"event": event, "file": file_path, "commits_since": count})
     return flagged
 
 
