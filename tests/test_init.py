@@ -72,6 +72,7 @@ def test_init_appends_idempotent_projectmem_bridge_to_agents_md(tmp_path, monkey
     assert first.count("<!-- >>> projectmem codex bridge >>>") == 1
     assert "project_id` to every project-scoped tool" in first
     assert "get_instructions(project_id)" in first
+    assert "Do not repeat them in an unchanged conversation" in first
     assert "precheck_file(project_id, path)" in first
 
     result = runner.invoke(app, args, catch_exceptions=False)

@@ -198,8 +198,11 @@ def _agents_md_bridge(root: Path) -> str:
         "Use the global `pjm-mcp-global` server for Projectmem. Pass this "
         f"exact `project_id` to every project-scoped tool: `{project_id}`. "
         "Do not bind `--root` or infer a project from CWD.\n\n"
-        "At session start call `get_instructions(project_id)`, then "
-        "`get_summary(project_id)`. Before editing a file call "
+        "Before the first substantive project task in a new or resumed agent "
+        "session, call `get_instructions(project_id)`, then "
+        "`get_summary(project_id)`. Do not repeat them in an unchanged "
+        "conversation; refresh after context recovery, task switching, or when "
+        "the project state may have changed. Before editing a file call "
         "`precheck_file(project_id, path)`.\n"
         f"{_AGENTS_MD_BRIDGE_END}\n"
     )
