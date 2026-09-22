@@ -15,6 +15,7 @@ from pathlib import Path
 
 import typer
 
+from projectmem.glyphs import RULE
 from projectmem.models import Event, superseded_ids
 from projectmem.storage import read_events
 
@@ -55,7 +56,7 @@ def _safe_echo(text: object = "") -> None:
 def _rule(width: int = 60) -> str:
     encoding = _stdout_encoding().lower()
     if "utf" in encoding:
-        return "─" * width
+        return RULE * width
     return "-" * width
 
 

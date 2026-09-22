@@ -8,6 +8,7 @@ from pathlib import Path
 
 import typer
 
+from projectmem.glyphs import ARROW, RULE_DOUBLE
 from projectmem.storage import initialize
 
 
@@ -154,6 +155,11 @@ def _claude_md_bridge(root: Path) -> str:
         "  - After confirmation → `record_fix(summary)`.\n"
         "  - On a design choice → `add_decision(summary)`.\n"
         "  - On a gotcha / setup detail → `add_note(summary)`.\n\n"
+        "When a new decision replaces an older one, pass\n"
+        "`supersedes=\"<old event id>\"` to `add_decision`. The log stays\n"
+        "append-only, but the retired decision leaves the live summary and\n"
+        "precheck results. Get event ids from `get_summary()` or\n"
+        "`search_events()`.\n\n"
         "Editing `.projectmem/summary.md` or `.projectmem/PROJECT_MAP.md`\n"
         "directly bypasses event logging and breaks audit replay. The\n"
         "summary file regenerates from `events.jsonl` automatically — write\n"
@@ -203,7 +209,8 @@ def _agents_md_bridge(root: Path) -> str:
         "`get_summary(project_id)`. Do not repeat them in an unchanged "
         "conversation; refresh after context recovery, task switching, or when "
         "the project state may have changed. Before editing a file call "
-        "`precheck_file(project_id, path)`.\n"
+        "`precheck_file(project_id, path)`. When a decision replaces an older "
+        "one, pass `supersedes=\"<old event id>\"` to `add_decision`.\n"
         f"{_AGENTS_MD_BRIDGE_END}\n"
     )
 
@@ -365,12 +372,12 @@ def _inherit_global_memory(root: Path, filter_tags: str | None = None) -> None:
     typer.echo(f"\n  Global memory: Detected stack [{tags_str}]")
     if r_gotchas:
         typer.echo(
-            f"    → {len(r_gotchas)} library gotchas available; "
+            f"    {ARROW} {len(r_gotchas)} library gotchas available; "
             "bounded preview injected into AI_INSTRUCTIONS.md"
         )
     if r_patterns:
         typer.echo(
-            f"    → {len(r_patterns)} patterns available; "
+            f"    {ARROW} {len(r_patterns)} patterns available; "
             "bounded preview injected into AI_INSTRUCTIONS.md"
         )
 
@@ -612,7 +619,7 @@ def _print_mcp_config(root: Path) -> None:
     project ids supplied per tool call.
     """
     py = sys.executable  # Absolute path — subprocesses don't inherit shell PATH.
-    bar = "═" * 62
+    bar = RULE_DOUBLE * 62
     typer.echo("")
     typer.echo(bar)
     typer.echo("  Global MCP configuration — paste once into your client:")
@@ -631,7 +638,7 @@ def _print_mcp_config(root: Path) -> None:
         "    Claude Desktop  ~/Library/Application Support/Claude/"
         "claude_desktop_config.json"
     )
-    typer.echo("    Cursor          Settings → Tools & MCPs (global)")
+    typer.echo(f"    Cursor          Settings {ARROW} Tools & MCPs (global)")
     typer.echo(
         "    Antigravity     ~/.gemini/antigravity/mcp_config.json  "
         "(legacy IDE; v2 path may differ)"

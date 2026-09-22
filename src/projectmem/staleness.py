@@ -114,6 +114,7 @@ def find_stale_events(
     events: list[Event],
     root: Path | None = None,
     threshold: int = STALE_COMMIT_THRESHOLD,
+    only_files: set[str] | None = None,
 ) -> list[dict]:
     """Flag live decisions/fixes/notes whose cited file has moved on.
 
@@ -121,6 +122,11 @@ def find_stale_events(
     -1 when the cited file no longer exists (deleted/renamed), which is
     reported as its own, stronger staleness reason. Superseded events are
     skipped: they are already retired, flagging them again is noise.
+
+    ``only_files`` scopes the check to the files currently being prechecked.
+    Project-wide callers such as ``brief`` leave it unset; the precheck path
+    supplies it so unrelated history cannot make an edit pay for unrelated
+    ``git`` work.
     """
     root_path = root or Path.cwd()
     retired = superseded_ids(events)
@@ -133,6 +139,8 @@ def find_stale_events(
             continue
         file_path = location_file(event)
         if not file_path:
+            continue
+        if only_files is not None and file_path not in only_files:
             continue
         if not (root_path / file_path).exists():
             flagged.append({"event": event, "file": file_path, "commits_since": -1})

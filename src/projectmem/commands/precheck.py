@@ -26,7 +26,8 @@ from typing import Any
 
 import typer
 
-from projectmem.models import Event
+from projectmem.glyphs import RULE
+from projectmem.models import Event, superseded_ids
 from projectmem.storage import MEM_DIR, read_events, require_mem_dir
 
 # ── Thresholds ──
@@ -75,7 +76,7 @@ def _safe_echo(text: object = "", *, err: bool = False) -> None:
 def _rule(width: int = 60) -> str:
     encoding = _stdout_encoding().lower()
     if "utf" in encoding:
-        return "─" * width
+        return RULE * width
     return "-" * width
 
 
@@ -258,7 +259,7 @@ def _analyze_files(
 
     warnings: list[dict[str, Any]] = []
 
-    # ── Check 6 input: stale memories (computed once for all files) ──
+    # ── Check 6 input: stale memories for the files being checked ──
     # Decisions/fixes/notes whose cited file changed substantially after
     # they were logged. Never deleted, never down-ranked — flagged for a
     # human (or agent) to confirm or supersede.
@@ -266,7 +267,7 @@ def _analyze_files(
         from projectmem.staleness import find_stale_events
 
         stale_by_file: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for item in find_stale_events(events, root):
+        for item in find_stale_events(events, root, only_files=set(files)):
             stale_by_file[item["file"]].append(item)
     except Exception:
         stale_by_file = defaultdict(list)
@@ -331,7 +332,7 @@ def _analyze_files(
         # Source of truth is `git log` over the window, not the event log
         # (L-023a). Counting events would understate fresh, repeated edits
         # that the memory layer hasn't captured yet.
-        git_churn = _git_recent_changes(file_path, RECENT_DAYS)
+        git_churn = _git_recent_changes(file_path, RECENT_DAYS, root)
         churn_count = git_churn if git_churn is not None else sum(
             1 for e in recent if e.git_commit
         )
@@ -413,9 +414,17 @@ def _analyze_files(
 
 
 def _events_for_file(file_path: str, events: list[Event]) -> list[Event]:
-    """Return all events that reference this file."""
+    """Return live events that reference this file.
+
+    A superseded decision remains in the append-only log for auditability, but
+    must not participate in warnings shown to an agent. Otherwise retiring a
+    decision can still leave a contradictory precheck warning behind.
+    """
+    retired = superseded_ids(events)
     matching: list[Event] = []
     for e in events:
+        if e.id in retired:
+            continue
         # Direct files list
         if file_path in e.files:
             matching.append(e)

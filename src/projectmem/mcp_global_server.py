@@ -23,7 +23,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, TypeVar
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ImportError:  # mcp >= 2.0 renamed the implementation module
+    from mcp.server.mcpserver import MCPServer as FastMCP
 from pydantic import Field
 
 from projectmem.commands import attempt, decision, fix, log, note
@@ -105,7 +108,9 @@ _GLOBAL_INSTRUCTIONS = (
     "get_issue(project_id, issue_id) or get_context(project_id).\n\n"
     "Use the write tools for issues, attempts, fixes, decisions, and notes. "
     "They are project-scoped by the explicit project_id and preserve each "
-    "project's append-only event log."
+    "project's append-only event log. When a decision replaces an older one, "
+    "pass supersedes=<old event id> to add_decision so the old event remains "
+    "auditable but leaves the live summary."
 )
 
 

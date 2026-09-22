@@ -11,6 +11,7 @@ import typer
 # Marker used to identify projectmem's section in git hooks
 HOOK_MARKER_START = "# >>> projectmem auto-capture >>>"
 HOOK_MARKER_END = "# <<< projectmem auto-capture <<<"
+HOOK_SHEBANG = "#!/bin/sh\n"
 
 
 # ── L-047: bake the absolute path to `pjm` into the hook ────────────────
@@ -23,23 +24,38 @@ HOOK_MARKER_END = "# <<< projectmem auto-capture <<<"
 # fallback to `command -v` for the rare case where the install-time binary
 # was moved.
 
+
+def _shell_path(path: str) -> str:
+    """Normalize a native path before embedding it in a Git hook shell."""
+    return path.replace("\\", "/")
+
 def _resolve_pjm_binary() -> str:
     """Find an absolute path to a working pjm-equivalent CLI.
 
     Preference order:
       1. ``pjm`` on PATH (most common — pip-installed entry point)
       2. ``projectmem`` on PATH (alias entry point)
-      3. ``<sys.prefix>/bin/pjm`` (conda / venv layout where the entry
-         point lives next to the python that imported this module)
+      3. The entry point next to the interpreter that imported this module —
+         ``bin`` on POSIX and ``Scripts`` on Windows.
       4. Bare ``"pjm"`` as a last resort — preserves prior behaviour and
          the runtime fallback in the snippet can still find it.
     """
     found = shutil.which("pjm") or shutil.which("projectmem")
     if found:
-        return found
-    venv_guess = Path(sys.prefix) / "bin" / "pjm"
-    if venv_guess.exists():
-        return str(venv_guess)
+        return _shell_path(found)
+    if os.name == "nt":
+        candidates = (
+            Path(sys.prefix) / "Scripts" / "pjm.exe",
+            Path(sys.prefix) / "Scripts" / "projectmem.exe",
+        )
+    else:
+        candidates = (
+            Path(sys.prefix) / "bin" / "pjm",
+            Path(sys.prefix) / "bin" / "projectmem",
+        )
+    for candidate in candidates:
+        if candidate.exists():
+            return _shell_path(str(candidate))
     return "pjm"
 
 
@@ -141,7 +157,7 @@ def install_hooks(hooks_dir: Path) -> None:
             # Append to existing hook
             content = content.rstrip("\n") + "\n\n" + snippet
         else:
-            content = "#!/usr/bin/env bash\n" + snippet
+            content = HOOK_SHEBANG + snippet
 
         hook_path.write_text(content, encoding="utf-8")
         _make_executable(hook_path)
@@ -159,7 +175,7 @@ def install_hooks(hooks_dir: Path) -> None:
             installed.append("pre-commit")
     else:
         precommit_path.write_text(
-            "#!/usr/bin/env bash\n" + precheck_snippet, encoding="utf-8"
+            HOOK_SHEBANG + precheck_snippet, encoding="utf-8"
         )
         _make_executable(precommit_path)
         installed.append("pre-commit")

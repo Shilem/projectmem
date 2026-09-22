@@ -15,6 +15,7 @@ from typing import Any
 import typer
 
 from projectmem.commands.score import calculate_score
+from projectmem.glyphs import RULE_HEAVY
 from projectmem.storage import events_path, require_mem_dir
 
 # Roughly the total token count of the LOTR trilogy. Used only for the
@@ -87,9 +88,9 @@ def run(fmt: str = "text", root: Path | None = None) -> None:
     usd = data["usd_saved"]
 
     typer.echo("")
-    typer.echo("━" * 40)
+    typer.echo(RULE_HEAVY * 40)
     typer.echo("  PROJECTMEM TOKEN ROI DASHBOARD")
-    typer.echo("━" * 40)
+    typer.echo(RULE_HEAVY * 40)
     typer.echo(f"  Score:                 {data['score']}/100 ({data['grade']})")
     typer.echo(f"  Total Tokens Saved:    {tokens:,}")
     typer.echo(f"  Estimated USD Saved:   ${usd:.2f}")
@@ -110,5 +111,5 @@ def run(fmt: str = "text", root: Path | None = None) -> None:
         )
     else:
         typer.echo("  Keep going — every issue and fix you log compounds.")
-    typer.echo("━" * 40)
+    typer.echo(RULE_HEAVY * 40)
     typer.echo("")

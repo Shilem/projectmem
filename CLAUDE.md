@@ -30,6 +30,12 @@ files directly via filesystem write:
   - On a design choice → `add_decision(summary)`.
   - On a gotcha / setup detail → `add_note(summary)`.
 
+When a new decision replaces an older one, pass
+`supersedes="<old event id>"` to `add_decision`. The log stays
+append-only, but the retired decision leaves the live summary and
+precheck results. Get event ids from `get_summary()` or
+`search_events()`.
+
 Editing `.projectmem/summary.md` or `.projectmem/PROJECT_MAP.md`
 directly bypasses event logging and breaks audit replay. The
 summary file regenerates from `events.jsonl` automatically — write

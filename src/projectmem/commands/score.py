@@ -17,6 +17,7 @@ from typing import Any
 
 import typer
 
+from projectmem.glyphs import BAR_EMPTY, BAR_FULL, RULE
 from projectmem.storage import require_mem_dir
 
 # ── Weights for time/token estimation ──
@@ -213,9 +214,9 @@ def format_terminal(result: dict[str, Any]) -> str:
         f"      {grade_color}{'=' * 8} {g} {'=' * 8}{reset}",
         f"       {grade_color}Score: {s}/100{reset}",
         "",
-        f"  {dim}{'─' * 44}{reset}",
+        f"  {dim}{RULE * 44}{reset}",
         f"  {bold}Knowledge Captured{reset}",
-        f"  {dim}{'─' * 44}{reset}",
+        f"  {dim}{RULE * 44}{reset}",
         f"    Failed approaches on record:  {bold}{c['failed_approaches']}{reset}",
         f"    Decisions documented:          {bold}{c['decisions_documented']}{reset}",
         f"    Fixes with context:            {bold}{c['fixes_with_context']}{reset}",
@@ -223,24 +224,24 @@ def format_terminal(result: dict[str, Any]) -> str:
         f"    Files with known gotchas:      {bold}{c['files_with_gotchas']}{reset}",
         f"    High-churn files flagged:      {bold}{c['high_churn_files']}{reset}",
         "",
-        f"  {dim}{'─' * 44}{reset}",
+        f"  {dim}{RULE * 44}{reset}",
         f"  {bold}Estimated Value{reset}",
-        f"  {dim}{'─' * 44}{reset}",
+        f"  {dim}{RULE * 44}{reset}",
         f"    Debugging hours saved:       {bold}~{v['debugging_hours_saved']:.1f}h{reset}",
         f"    Tokens saved:                {bold}{v['tokens_saved']:,}{reset}",
         f"    Estimated USD saved:         {bold}${v['usd_saved']:.2f}{reset}",
         "",
-        f"  {dim}{'─' * 44}{reset}",
+        f"  {dim}{RULE * 44}{reset}",
         f"  {bold}Capture Stats{reset}",
-        f"  {dim}{'─' * 44}{reset}",
+        f"  {dim}{RULE * 44}{reset}",
         f"    Total events:                {bold}{cap['total']}{reset}",
         f"    Manual:                      {bold}{cap['manual']}{reset}",
         f"    Auto-captured:               {bold}{cap['auto_captured']}{reset}",
         f"    Auto-capture rate:           {bold}{cap['auto_rate']}%{reset}",
         "",
-        f"  {dim}{'─' * 44}{reset}",
+        f"  {dim}{RULE * 44}{reset}",
         f"  {bold}Score Breakdown (20 pts each){reset}",
-        f"  {dim}{'─' * 44}{reset}",
+        f"  {dim}{RULE * 44}{reset}",
         f"    Failed knowledge:    {_bar(bd['failed_knowledge'], 20)} {bd['failed_knowledge']}/20",
         f"    Decisions:           {_bar(bd['decisions'], 20)} {bd['decisions']}/20",
         f"    Fixes:               {_bar(bd['fixes'], 20)} {bd['fixes']}/20",
@@ -255,7 +256,7 @@ def format_terminal(result: dict[str, Any]) -> str:
 def _bar(value: float, max_val: float, width: int = 16) -> str:
     """Render a small progress bar."""
     filled = int((value / max_val) * width) if max_val > 0 else 0
-    return f"\033[36m{'█' * filled}{'░' * (width - filled)}\033[0m"
+    return f"\033[36m{BAR_FULL * filled}{BAR_EMPTY * (width - filled)}\033[0m"
 
 
 def format_badge(result: dict[str, Any]) -> str:
@@ -360,7 +361,7 @@ def _format_verbose_breakdown(
         if loc and ":" in loc:
             files_with_gotchas.add(loc.split(":")[0])
 
-    lines = ["", f"  {bold}Verbose Breakdown{reset}", f"  {dim}{'─' * 44}{reset}"]
+    lines = ["", f"  {bold}Verbose Breakdown{reset}", f"  {dim}{RULE * 44}{reset}"]
     sections = [
         ("Failed approaches", failed, "summary"),
         ("Decisions documented", decisions, "summary"),

@@ -22,6 +22,7 @@ from pathlib import Path
 import typer
 
 from projectmem.commands.context import generate_context, resolve_token_budget
+from projectmem.glyphs import RULE
 from projectmem.storage import read_events, require_mem_dir
 
 # ── Agent configurations ──
@@ -151,13 +152,13 @@ def _show_preview(
     reset = "\033[0m"
 
     typer.echo(f"\n{bold}Context Preview{reset}")
-    typer.echo(f"{dim}{'─' * 50}{reset}")
+    typer.echo(f"{dim}{RULE * 50}{reset}")
     typer.echo(f"  Agent:       {cyan}{config['description']}{reset}")
     typer.echo(f"  Injection:   {config['injection']}")
     typer.echo(f"  Tokens:      {tokens_used}/{budget} ({level})")
-    typer.echo(f"{dim}{'─' * 50}{reset}\n")
+    typer.echo(f"{dim}{RULE * 50}{reset}\n")
     typer.echo(context_md)
-    typer.echo(f"\n{dim}{'─' * 50}{reset}")
+    typer.echo(f"\n{dim}{RULE * 50}{reset}")
     typer.echo(f"{dim}Run without --preview to inject and launch.{reset}\n")
 
 

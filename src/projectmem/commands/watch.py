@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
 import sys
 import time
 from collections import defaultdict, deque
@@ -21,6 +22,7 @@ from pathlib import Path
 
 import typer
 
+from projectmem.glyphs import RUNNING, STOPPED
 from projectmem.models import Event
 from projectmem.storage import (
     append_event,
@@ -94,6 +96,63 @@ def _should_ignore(path: Path, root: Path, gitignore: set[str]) -> bool:
     return False
 
 
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_PROCESS_TERMINATE = 0x0001
+_STILL_ACTIVE = 259
+_ERROR_ACCESS_DENIED = 5
+
+
+def _pid_alive(pid: int) -> bool:
+    """Return whether ``pid`` is alive on both POSIX and Windows."""
+    if sys.platform.startswith("win"):
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(
+            _PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+        )
+        if not handle:
+            # Access denied still proves that the process exists. Treating it
+            # as dead would delete a live PID file and orphan the worker.
+            return kernel32.GetLastError() == _ERROR_ACCESS_DENIED
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == _STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _terminate(pid: int) -> None:
+    """Terminate a watcher, using the platform-native process API."""
+    if sys.platform.startswith("win"):
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(_PROCESS_TERMINATE, False, pid)
+        if not handle:
+            if kernel32.GetLastError() == _ERROR_ACCESS_DENIED:
+                raise PermissionError(f"Access denied terminating PID {pid}")
+            raise ProcessLookupError(f"No process with PID {pid}")
+        try:
+            if not kernel32.TerminateProcess(handle, 1):
+                raise PermissionError(f"Could not terminate PID {pid}")
+        finally:
+            kernel32.CloseHandle(handle)
+        return
+
+    os.kill(pid, signal.SIGTERM)
+
+
 def _running_pid(root: Path | None = None) -> int | None:
     """Return PID if a daemon is running and reachable, else None."""
     pf = _pid_path(root)
@@ -103,17 +162,14 @@ def _running_pid(root: Path | None = None) -> int | None:
         pid = int(pf.read_text(encoding="utf-8").strip())
     except (ValueError, OSError):
         return None
-    # Is process alive?
-    try:
-        os.kill(pid, 0)
+    if _pid_alive(pid):
         return pid
+    # Stale PID file — clean up only after the process is known to be gone.
+    try:
+        pf.unlink()
     except OSError:
-        # Stale PID file — clean up
-        try:
-            pf.unlink()
-        except OSError:
-            pass
-        return None
+        pass
+    return None
 
 
 def _cleanup_pid_file(root: Path | None = None) -> None:
@@ -129,6 +185,7 @@ def run(
     daemon: bool = False,
     stop: bool = False,
     status: bool = False,
+    worker: bool = False,
     root: Path | None = None,
 ) -> None:
     """Dispatch watch subcommands."""
@@ -139,6 +196,9 @@ def run(
         return
     if status:
         _show_status(root)
+        return
+    if worker:
+        _run_worker(root)
         return
 
     # Check for existing daemon
@@ -169,44 +229,9 @@ def _run_foreground(root: Path | None = None) -> None:
         _cleanup_pid_file(root)
 
 
-def _run_as_daemon(root: Path | None = None) -> None:
-    """Fork to background and run watch loop."""
-    # Fork once and detach
-    try:
-        pid = os.fork()
-    except OSError as e:
-        typer.echo(f"\033[31mprojectmem:\033[0m Daemon fork failed: {e}", err=True)
-        return
-
-    if pid > 0:
-        # Parent — report success and exit
-        time.sleep(0.3)  # give child time to write PID
-        new_pid = _running_pid(root)
-        if new_pid:
-            typer.echo(
-                f"\033[32mprojectmem:\033[0m Watcher started (PID {new_pid})\n"
-                f"  Logs: .projectmem/watch.log\n"
-                f"  Stop: pjm watch --stop"
-            )
-        else:
-            typer.echo(
-                "\033[33mprojectmem:\033[0m Daemon may have failed to start — check .projectmem/watch.log"
-            )
-        return
-
-    # Child — detach and run
-    os.setsid()
-    # Redirect stdio to watch.log
+def _run_worker(root: Path | None = None) -> None:
+    """Run the watcher as a detached background worker."""
     root_path = root or Path.cwd()
-    log_file = _log_path(root_path)
-    try:
-        with open(log_file, "a", encoding="utf-8") as log_fd, open(os.devnull, "r") as devnull:
-            os.dup2(log_fd.fileno(), sys.stdout.fileno())
-            os.dup2(log_fd.fileno(), sys.stderr.fileno())
-            sys.stdin = os.fdopen(os.dup(devnull.fileno()), "r")
-    except OSError:
-        pass
-
     _write_pid(os.getpid(), root_path)
 
     # Register signal handlers
@@ -215,13 +240,74 @@ def _run_as_daemon(root: Path | None = None) -> None:
         _cleanup_pid_file(root_path)
         sys.exit(0)
 
-    signal.signal(signal.SIGTERM, _shutdown)
-    signal.signal(signal.SIGINT, _shutdown)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _shutdown)
+        except (AttributeError, ValueError):
+            # Some embedded/test runtimes do not expose or permit all signals.
+            pass
 
     try:
         _watch_loop(root_path, verbose=False)
     finally:
         _cleanup_pid_file(root_path)
+
+
+def _run_as_daemon(root: Path | None = None) -> None:
+    """Spawn a detached worker without relying on ``os.fork``."""
+    root_path = (root or Path.cwd()).resolve()
+    log_file = _log_path(root_path)
+    command = [sys.executable, "-m", "projectmem.cli", "watch", "--worker"]
+    try:
+        with open(log_file, "a", encoding="utf-8") as log_fd:
+            if sys.platform.startswith("win"):
+                flags = (
+                    subprocess.DETACHED_PROCESS
+                    | subprocess.CREATE_NEW_PROCESS_GROUP
+                    | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                )
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(root_path),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_fd,
+                    stderr=log_fd,
+                    creationflags=flags,
+                    close_fds=True,
+                )
+            else:
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(root_path),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_fd,
+                    stderr=log_fd,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+    except OSError as exc:
+        typer.echo(
+            f"\033[31mprojectmem:\033[0m Daemon spawn failed: {exc}",
+            err=True,
+        )
+        return
+
+    time.sleep(0.3)
+    if process.poll() is not None:
+        typer.echo(
+            "\033[31mprojectmem:\033[0m Daemon exited unexpectedly "
+            f"(code {process.returncode}) — check .projectmem/watch.log",
+            err=True,
+        )
+        return
+
+    pid = _running_pid(root_path) or process.pid
+    _write_pid(pid, root_path)
+    typer.echo(
+        f"\033[32mprojectmem:\033[0m Watcher started (PID {pid})\n"
+        "  Logs: .projectmem/watch.log\n"
+        "  Stop: pjm watch --stop"
+    )
 
 
 def _write_pid(pid: int, root: Path | None = None) -> None:
@@ -373,12 +459,13 @@ def _stop_daemon(root: Path | None = None) -> None:
         return
 
     try:
-        os.kill(pid, signal.SIGTERM)
+        _terminate(pid)
         # Wait up to 3s for clean exit
         for _ in range(15):
             time.sleep(0.2)
             if _running_pid(root) is None:
                 break
+        _cleanup_pid_file(root)
         typer.echo(f"\033[32mprojectmem:\033[0m Watcher stopped (PID {pid}).")
     except ProcessLookupError:
         _cleanup_pid_file(root)
@@ -395,7 +482,7 @@ def _show_status(root: Path | None = None) -> None:
     pid = _running_pid(root)
     if pid is None:
         typer.echo(
-            "\033[2m○\033[0m \033[33mnot running\033[0m\n"
+            f"\033[2m{STOPPED}\033[0m \033[33mnot running\033[0m\n"
             "  Start with: pjm watch --daemon"
         )
         return
@@ -410,7 +497,7 @@ def _show_status(root: Path | None = None) -> None:
         uptime_str = f"{h}h {m}m" if h else f"{m}m"
 
     typer.echo(
-        f"\033[32m●\033[0m \033[32mrunning\033[0m · PID {pid}"
+        f"\033[32m{RUNNING}\033[0m \033[32mrunning\033[0m · PID {pid}"
         + (f" · uptime {uptime_str}" if uptime_str else "")
     )
     typer.echo("  Logs: .projectmem/watch.log")

@@ -38,7 +38,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ImportError:  # mcp >= 2.0 renamed the implementation module
+    from mcp.server.mcpserver import MCPServer as FastMCP
 from pydantic import Field
 
 from projectmem.commands import attempt, decision, fix, log, note
@@ -251,6 +254,10 @@ mcp = FastMCP(
         "  - After confirmation → use record_fix(summary) for the active issue. If fixing a specific older issue, use record_fix(summary, issue_id=\"<issue_id>\") and replace <issue_id> with the actual Projectmem issue ID.\n"
         "  - On a design choice → add_decision(summary).\n"
         "  - On a gotcha / setup detail → add_note(summary).\n"
+        "  - When a decision replaces an earlier one → pass\n"
+        "    supersedes=\"<old event id>\" to add_decision. The event log\n"
+        "    stays append-only, while the retired decision drops out of\n"
+        "    summary.md, get_context(), and precheck warnings.\n"
         "Editing .projectmem/summary.md or .projectmem/PROJECT_MAP.md\n"
         "directly bypasses event logging and breaks audit replay. The\n"
         "summary.md file is auto-regenerated from events.jsonl — write\n"
@@ -363,8 +370,9 @@ def precheck_file(
 
     Read-only; does not modify memory."""
     from projectmem.commands.precheck import _analyze_files
-    events = read_events()
-    warnings = _analyze_files([file_path], events)
+    root = _PROJECT_ROOT
+    events = read_events(root)
+    warnings = _analyze_files([file_path], events, root=root)
     if not warnings:
         return f"{file_path}: no warnings. Safe to modify."
     lines = [f"projectmem precheck: {file_path}"]

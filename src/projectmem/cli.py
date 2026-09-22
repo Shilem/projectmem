@@ -31,6 +31,7 @@ from projectmem.commands import stats as stats_command
 from projectmem.commands import visualize as visualize_command
 from projectmem.commands import watch as watch_command
 from projectmem.commands import wrap as wrap_command
+from projectmem.glyphs import configure_stdio
 from projectmem.storage import ProjectMemError
 
 app = typer.Typer(
@@ -379,9 +380,10 @@ def watch(
     daemon: bool = typer.Option(False, "--daemon", help="Run in background as a daemon."),
     stop: bool = typer.Option(False, "--stop", help="Stop the running watcher."),
     status: bool = typer.Option(False, "--status", help="Show watcher status."),
+    worker: bool = typer.Option(False, "--worker", hidden=True, help="Internal background worker."),
 ) -> None:
     """Watch file activity in real-time and log churn events (opt-in)."""
-    watch_command.run(daemon=daemon, stop=stop, status=status)
+    watch_command.run(daemon=daemon, stop=stop, status=status, worker=worker)
 
 
 @app.command()
@@ -425,11 +427,12 @@ def global_memory(
 
 
 def main() -> None:
+    configure_stdio()
     try:
         app()
     except ProjectMemError as exc:
         typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(1) from exc
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":
